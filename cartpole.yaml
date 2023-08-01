@@ -1,3 +1,4 @@
+env: "popgym.envs.StatelessCartPoleEasy"
 segment_length: 20
 batch_size: 256
 random_frames: 20_000

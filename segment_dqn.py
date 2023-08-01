@@ -3,20 +3,15 @@ import math
 import torch
 import tqdm
 import popgym
+from utils import hard_update, soft_update, load_popgym_env, load_wrapped_popgym_env, truncate_trajectories
+import numpy as np
+import gymnasium as gym
+import importlib
 from tensordict.nn import TensorDictModule as Mod, TensorDictSequential as Seq
 from torch import nn
-from torchrl.envs.libs.gym import GymWrapper
 from torchrl.collectors import SyncDataCollector
 import tensordict
 from torchrl.data import LazyTensorStorage, TensorDictReplayBuffer
-from torchrl.envs import (
-    Compose,
-    InitTracker,
-    StepCounter,
-    TransformedEnv,
-    RewardSum,
-)
-from torchrl.envs.libs.gym import GymEnv
 from torchrl.modules import ConvNet, EGreedyWrapper, LSTMModule, MLP, QValueModule
 from torchrl.objectives import DQNLoss, SoftUpdate, HardUpdate
 from updater import SoftUpdateModule
@@ -30,36 +25,10 @@ with open("cartpole.yaml") as f:
 torch.manual_seed(config["seed"])
 config["epochs"] = config["total_frames"] // config["segment_length"]
 
-
-def soft_update(target, source, tau):
-    for target_param, param in zip(target.parameters(), source.parameters()):
-        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
-
-
-def hard_update(target, source, delay, update):
-    if update % delay == 0:
-        target.load_state_dict(source.state_dict())
-
-
 device = torch.device(0) if torch.cuda.device_count() else torch.device("cpu")
-env = TransformedEnv(
-    GymWrapper(popgym.envs.StatelessCartPole(), device=device),
-    #GymEnv("CartPole-v0"),
-    Compose(
-        StepCounter(),
-        InitTracker(),
-        RewardSum(),
-    ),
-)
-eval_env = TransformedEnv(
-    GymWrapper(popgym.envs.StatelessCartPole(), device=device),
-    #GymEnv("CartPole-v0"),
-    Compose(
-        StepCounter(),
-        InitTracker(),
-        RewardSum(),
-    ),
-)
+env = load_wrapped_popgym_env(config, device)
+eval_env = load_wrapped_popgym_env(config, device, eval=True)
+
 # Networks
 pre = nn.Sequential(
     nn.Linear(env.observation_spec['observation'].shape[0], config["mlp_encoder_size"]),
@@ -78,7 +47,7 @@ post = nn.Sequential(
     nn.ReLU(),
     nn.Linear(config["recurrent_size"], config["mlp_encoder_size"]),
     nn.ReLU(),
-    nn.Linear(config["mlp_encoder_size"], 2),
+    nn.Linear(config["mlp_encoder_size"], env.action_space.n),
 )
 nn.init.normal_(post[-1].weight.data, 0, 0.001)
 post[-1].bias.data.fill_(0)
@@ -88,11 +57,9 @@ target_post = copy.deepcopy(post)
 state_mod = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
     LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state").set_recurrent_mode(True)
-    # Mod(nn.Identity(), in_keys=["embed"], out_keys=["markov_state"]),
 )
 target_state_mod = Seq(
     Mod(target_pre, in_keys=["observation"], out_keys=["embed"]),
-    # Mod(nn.Identity(), in_keys=["embed"], out_keys=["markov_state"])
     LSTMModule(lstm=copy.deepcopy(lstm), in_key="embed", out_key="markov_state").set_recurrent_mode(True),
 )
 q_mod = Seq(
@@ -102,7 +69,6 @@ q_mod = Seq(
 eval_policy = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
     LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
-    # Mod(nn.Identity(), in_keys=["embed"], out_keys=["markov_state"]),
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
     QValueModule(action_space=env.action_spec),
 )
@@ -118,14 +84,12 @@ loss_fn = DQNLoss(
     delay_value=True,
     action_space=env.action_spec,
 )
-#updater = SoftUpdate(loss_fn, tau=config["tau"])
 updater = HardUpdate(loss_fn, value_network_update_interval=config["target_delay"])
 
 if hasattr(state_mod[1], "make_tensordict_primer"):
     env.append_transform(state_mod[1].make_tensordict_primer())
     eval_env.append_transform(state_mod[1].make_tensordict_primer())
 
-# policy(env.reset())
 state_mod(env.reset())
 
 optim = torch.optim.AdamW(
@@ -172,6 +136,7 @@ for i, data in enumerate(collector):
     pbar.update()
     # it is important to pass data that is not flattened
     # TODO: data is often longer than this, what does padding do?
+    #truncate_trajectories(data, config["segment_length"])
     padded = tensordict.pad(data, [0, 0, 0, config["segment_length"] - data.shape[-1]])
     rb.extend(padded)
     unpadded_data = data.masked_select(data[('collector', 'mask')])
@@ -204,9 +169,6 @@ for i, data in enumerate(collector):
         loss['loss'].backward()
         optim.step()
         optim.zero_grad()
-
-        # hard_update(target_state_mod, state_mod, target_delay, i * utd + u)
-        # hard_update(target_q_mod, q_mod, target_delay, i * utd + u)
 
         #soft_update(target_state_mod, state_mod, config["tau"])
         hard_update(target_state_mod, state_mod, config["target_delay"], i * config["utd"] + u)

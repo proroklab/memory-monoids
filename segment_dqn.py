@@ -2,12 +2,13 @@ import copy
 import math
 import torch
 import tqdm
+from modules import MinReduce
 import popgym
 from utils import hard_update, soft_update, load_popgym_env, load_wrapped_popgym_env, truncate_trajectories
 import numpy as np
 import gymnasium as gym
 import importlib
-from tensordict.nn import TensorDictModule as Mod, TensorDictSequential as Seq
+from tensordict.nn import TensorDictModule as Mod, TensorDictSequential as Seq, EnsembleModule
 from torch import nn
 from torchrl.collectors import SyncDataCollector
 import tensordict
@@ -17,41 +18,59 @@ from torchrl.objectives import DQNLoss, SoftUpdate, HardUpdate
 from updater import SoftUpdateModule
 import wandb
 import yaml
+import argparse
 
 
-with open("cartpole.yaml") as f:
+a = argparse.ArgumentParser()
+a.add_argument("config", type=str)
+a.add_argument("--seed", '-s', type=int, default=0)
+a.add_argument("--device", '-d', type=str, default='cpu')
+args = a.parse_args()
+
+with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
-
-torch.manual_seed(config["seed"])
+config['seed'] = args.seed
+config['device'] = args.device
 config["epochs"] = config["total_frames"] // config["segment_length"]
 
-device = torch.device(0) if torch.cuda.device_count() else torch.device("cpu")
+torch.manual_seed(config["seed"])
+
+device = torch.device(config['device']) 
 env = load_wrapped_popgym_env(config, device)
 eval_env = load_wrapped_popgym_env(config, device, eval=True)
+obs_shape = math.prod(env.observation_spec['observation'].shape)
+if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+    act_shape = math.prod(env.action_space.nvec)
+    #var_nums = env.action_space.nvec.tolist()
+    #var_nums = [4, 4, 4, 4]
+    var_nums = [math.prod(env.action_space.nvec.tolist())]
+    #var_nums = [8, 8]
+else:
+    act_shape = env.action_space.n
+    var_nums = None
 
 # Networks
 pre = nn.Sequential(
-    nn.Linear(env.observation_spec['observation'].shape[0], config["mlp_encoder_size"]),
+    nn.Linear(obs_shape, config["mlp_encoder_size"]),
     nn.ReLU(),
     nn.Linear(config["mlp_encoder_size"], config["recurrent_size"]),
     nn.ReLU(),
-)
-target_pre = copy.deepcopy(pre)
+).to(device)
+target_pre = copy.deepcopy(pre).to(device)
 lstm = nn.LSTM(
     input_size=config["recurrent_size"],
     hidden_size=config["recurrent_size"],
     batch_first=True,
-)
-target_lstm = copy.deepcopy(lstm)
+).to(device)
+target_lstm = copy.deepcopy(lstm).to(device)
 post = nn.Sequential(
     nn.ReLU(),
     nn.Linear(config["recurrent_size"], config["mlp_encoder_size"]),
     nn.ReLU(),
-    nn.Linear(config["mlp_encoder_size"], env.action_space.n),
-)
+    nn.Linear(config["mlp_encoder_size"], act_shape),
+).to(device)
 nn.init.normal_(post[-1].weight.data, 0, 0.001)
 post[-1].bias.data.fill_(0)
-target_post = copy.deepcopy(post)
 
 # Modules
 state_mod = Seq(
@@ -64,13 +83,13 @@ target_state_mod = Seq(
 )
 q_mod = Seq(
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
-    QValueModule(action_space=env.action_spec),
+    QValueModule(action_space=env.action_spec, var_nums=var_nums),
 )
 eval_policy = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
     LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
-    QValueModule(action_space=env.action_spec),
+    QValueModule(action_space=env.action_spec, var_nums=var_nums),
 )
 policy = EGreedyWrapper(
     eval_policy,
@@ -138,7 +157,7 @@ for i, data in enumerate(collector):
     # TODO: data is often longer than this, what does padding do?
     #truncate_trajectories(data, config["segment_length"])
     padded = tensordict.pad(data, [0, 0, 0, config["segment_length"] - data.shape[-1]])
-    rb.extend(padded)
+    rb.extend(padded.cpu())
     unpadded_data = data.masked_select(data[('collector', 'mask')])
     if collector._frames < config["random_frames"]:
         continue
@@ -150,8 +169,8 @@ for i, data in enumerate(collector):
         # Do not use stale states
         # del batch['recurrent_state_c'], batch['recurrent_state_h'], batch[('next', 'recurrent_state_c')], batch[('next', 'recurrent_state_h')]
         state_mod(batch)
-        stored_states = batch.select(*[('next', 'recurrent_state_c'), ('next', 'recurrent_state_h')])
         # Prevent leaking learned network states into the target network
+        # Otherwise s_0 from learned net will feed into target network at initial timestep
         del (
             batch[("next", "recurrent_state_c")],
             batch[("next", "recurrent_state_h")],
@@ -160,7 +179,7 @@ for i, data in enumerate(collector):
             target_state_mod(batch["next"])
 
         # Replace stored states as target will have overwritten them
-        batch.update(stored_states)
+        #batch.update(stored_states)
         # Compute markov_state
         mask = batch[("collector", "mask")]
         masked = batch.masked_select(mask)
@@ -188,7 +207,7 @@ for i, data in enumerate(collector):
         "train/buffer_size": len(rb),
         "collector/action_histogram": wandb.Histogram(data["action"].cpu()),
     }
-    policy.step(data.numel())
+    policy.step(frames_this_iter)
     collector.update_policy_weights_()
 
     if i % config["eval_interval"] == 0:

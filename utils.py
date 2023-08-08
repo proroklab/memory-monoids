@@ -1,5 +1,6 @@
 import importlib
-from popgym.wrappers import PreviousAction, Antialias, Flatten
+import gymnasium as gym
+from popgym.wrappers import PreviousAction, Antialias, Flatten, DiscreteAction
 from torchrl.envs.libs.gym import GymWrapper
 from torchrl.envs import (
     Compose,
@@ -24,6 +25,8 @@ def load_popgym_env(config, eval=False):
     mod = importlib.import_module(module)
     instance = getattr(mod, cls)()
     instance = Flatten(Antialias(PreviousAction(instance)))
+    if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
+        instance = DiscreteAction(instance)
     instance.action_space.seed(config["seed"] + eval * 1000)
 
     return instance

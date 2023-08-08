@@ -1,0 +1,21 @@
+
+env: "popgym.envs.RepeatFirstEasy"
+segment_length: 20
+batch_size: 256
+random_frames: 20_000
+total_frames: 200_000
+eval_length: 1_000
+mlp_encoder_size: 64
+recurrent_size: 64
+utd: 1
+# In segments
+buffer_size: 50_000
+gamma: 0.99
+tau: 0.02
+target_delay: 200
+lr: 0.0001
+eval_interval: 20
+eps_init: 0.5
+eps_end: 0.01
+reward_scale: 1
+seed: 0

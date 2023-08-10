@@ -1,20 +1,29 @@
 env: "popgym.envs.MineSweeperEasy"
+seed: 0
+
+# Collection
 segment_length: 80
+epochs: 15_000
+random_epochs: 0 #1_000
+
+# Training
 batch_size: 512
-random_frames: 50_000
-total_frames: 500_000
-eval_length: 1_000
+utd: 1
+buffer_size: 200_000 # In segments
+gamma: 0.99
+target_delay: 1000 # In epochs/updates
+reward_scale: 1
+
+# Model
 mlp_encoder_size: 256
 recurrent_size: 256
-utd: 1
-# In segments
-buffer_size: 50_000
-gamma: 0.99
-tau: 0.02
-target_delay: 500
+reset_interval: 50_000 # in epochs
 lr: 0.0001
-eval_interval: 20
-eps_init: 0.5
+
+# Exploration
+eps_init: 0.3
 eps_end: 0.01
-reward_scale: 1
-seed: 0
+
+# Eval
+eval_interval: 50
+eval_length: 1_000

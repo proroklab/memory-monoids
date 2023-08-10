@@ -20,6 +20,30 @@ import wandb
 import yaml
 import argparse
 
+class MinReduce(TensorDictModuleBase):
+    def __init__(self, reduce_key):
+        super().__init__()
+        self.reduce_key = reduce_key
+        self.in_keys = [reduce_key]
+        self.out_keys = []
+
+    def forward(self, td):
+        # Can only reduce if the tensor is 1D
+        min_q = td.get(self.reduce_key).min(-1).values
+        reduced_td = td[0]
+        reduced_td[self.reduce_key] = min_q
+        return reduced_td
+
+class FinalLinear(nn.Linear):
+    def reset_parameters(self):
+        nn.init.normal_(self.weight.data, 0, 1e-4)
+        self.bias.data.zero_()
+        
+
+
+class TanhExp(nn.Module):
+    def forward(self, x):
+        return x * tanh(e^x)
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
@@ -31,7 +55,9 @@ with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 config['seed'] = args.seed
 config['device'] = args.device
-config["epochs"] = config["total_frames"] // config["segment_length"]
+#config["epochs"] = config["total_frames"] // config["segment_length"]
+config["total_frames"] = config["epochs"] * config["segment_length"]
+config["total_random_frames"] = config["random_epochs"] * config["segment_length"]
 
 torch.manual_seed(config["seed"])
 
@@ -39,22 +65,15 @@ device = torch.device(config['device'])
 env = load_wrapped_popgym_env(config, device)
 eval_env = load_wrapped_popgym_env(config, device, eval=True)
 obs_shape = math.prod(env.observation_spec['observation'].shape)
-if isinstance(env.action_space, gym.spaces.MultiDiscrete):
-    act_shape = math.prod(env.action_space.nvec)
-    #var_nums = env.action_space.nvec.tolist()
-    #var_nums = [4, 4, 4, 4]
-    var_nums = [math.prod(env.action_space.nvec.tolist())]
-    #var_nums = [8, 8]
-else:
-    act_shape = env.action_space.n
-    var_nums = None
+act_shape = env.action_space.n
 
 # Networks
 pre = nn.Sequential(
     nn.Linear(obs_shape, config["mlp_encoder_size"]),
-    nn.ReLU(),
+    nn.Mish(),
     nn.Linear(config["mlp_encoder_size"], config["recurrent_size"]),
-    nn.ReLU(),
+    nn.LayerNorm(config["recurrent_size"], elementwise_affine=False),
+    nn.Mish(),
 ).to(device)
 target_pre = copy.deepcopy(pre).to(device)
 lstm = nn.LSTM(
@@ -64,13 +83,11 @@ lstm = nn.LSTM(
 ).to(device)
 target_lstm = copy.deepcopy(lstm).to(device)
 post = nn.Sequential(
-    nn.ReLU(),
+    nn.Mish(),
     nn.Linear(config["recurrent_size"], config["mlp_encoder_size"]),
-    nn.ReLU(),
-    nn.Linear(config["mlp_encoder_size"], act_shape),
+    nn.Mish(),
+    FinalLinear(config["mlp_encoder_size"], act_shape),
 ).to(device)
-nn.init.normal_(post[-1].weight.data, 0, 0.001)
-post[-1].bias.data.fill_(0)
 
 # Modules
 state_mod = Seq(
@@ -83,17 +100,17 @@ target_state_mod = Seq(
 )
 q_mod = Seq(
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
-    QValueModule(action_space=env.action_spec, var_nums=var_nums),
+    QValueModule(action_space=env.action_spec),
 )
 eval_policy = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
     LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
-    QValueModule(action_space=env.action_spec, var_nums=var_nums),
+    QValueModule(action_space=env.action_spec),
 )
 policy = EGreedyWrapper(
     eval_policy,
-    annealing_num_steps=config["total_frames"],
+    annealing_num_steps=config["epochs"],
     spec=env.action_spec,
     eps_init=config["eps_init"],
     eps_end=config["eps_end"],
@@ -120,7 +137,7 @@ collector = SyncDataCollector(
     frames_per_batch=config["segment_length"],
     total_frames=config["total_frames"],
     split_trajs=True,
-    init_random_frames=config["random_frames"],
+    init_random_frames=config["total_random_frames"],
 )
 eval_collector = SyncDataCollector(
     eval_env,
@@ -136,7 +153,7 @@ rb = TensorDictReplayBuffer(
     batch_size=config["batch_size"],
     prefetch=config["batch_size"] * config["utd"],
 )
-pbar = tqdm.tqdm(total=config["epochs"])
+pbar = tqdm.tqdm(total=config["epochs"] + config["random_epochs"])
 longest = 0
 
 best_reward = -float("inf")
@@ -145,7 +162,7 @@ best_eval_reward = -float("inf")
 nonzero_frames = 0
 
 wandb.init(project="rdqn_segment", config=config)
-for i, data in enumerate(collector):
+for i, data in enumerate(collector, 1):
     frames_this_iter = data[("collector", "mask")].sum()
     nonzero_frames += frames_this_iter
     to_log = {
@@ -159,12 +176,17 @@ for i, data in enumerate(collector):
     padded = tensordict.pad(data, [0, 0, 0, config["segment_length"] - data.shape[-1]])
     rb.extend(padded.cpu())
     unpadded_data = data.masked_select(data[('collector', 'mask')])
-    if collector._frames < config["random_frames"]:
+    if collector._frames < config["total_random_frames"]:
         continue
     mean_reward = unpadded_data["episode_reward"][unpadded_data[("next", "done")]].mean()
     if mean_reward > best_reward:
         best_reward = mean_reward
     for u in range(config["utd"]):
+        if i % config["reset_interval"] == 0:
+            lstm.reset_parameters()
+            pre.apply(lambda x: x.reset_parameters() if hasattr(x, "reset_parameters") else None)
+            post.apply(lambda x: x.reset_parameters() if hasattr(x, "reset_parameters") else None)
+            
         batch = rb.sample().to(device)
         # Do not use stale states
         # del batch['recurrent_state_c'], batch['recurrent_state_h'], batch[('next', 'recurrent_state_c')], batch[('next', 'recurrent_state_h')]
@@ -190,11 +212,16 @@ for i, data in enumerate(collector):
         optim.zero_grad()
 
         #soft_update(target_state_mod, state_mod, config["tau"])
-        hard_update(target_state_mod, state_mod, config["target_delay"], i * config["utd"] + u)
+        hard_update(
+            target_state_mod, 
+            state_mod, 
+            config["target_delay"], 
+            i * config["utd"] + u
+        )
         updater.step()
 
     pbar.set_description(
-        f"loss_val: {loss['loss'].item():.5f}, reward(curr, best): ({mean_reward:.2f}, {best_reward:.2f}), eval reward(curr, best): ({eval_reward:.2f}, {best_eval_reward:.2f})"
+        f"loss: {loss['loss'].item():.3f}, rew(c:{mean_reward:.2f}, b:{best_reward:.2f}), eval rew: (c:{eval_reward:.2f}, b:{best_eval_reward:.2f})"
     )
     if not math.isnan(mean_reward):
         to_log = {**to_log, "train/reward": mean_reward}
@@ -205,9 +232,10 @@ for i, data in enumerate(collector):
         "train/best_reward": best_reward,
         "train/epsilon": policy.eps,
         "train/buffer_size": len(rb),
+        "train/buffer_capacity": len(rb) / config["buffer_size"],
         "collector/action_histogram": wandb.Histogram(data["action"].cpu()),
     }
-    policy.step(frames_this_iter)
+    policy.step(1)
     collector.update_policy_weights_()
 
     if i % config["eval_interval"] == 0:

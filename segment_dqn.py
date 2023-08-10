@@ -20,30 +20,12 @@ import wandb
 import yaml
 import argparse
 
-class MinReduce(TensorDictModuleBase):
-    def __init__(self, reduce_key):
-        super().__init__()
-        self.reduce_key = reduce_key
-        self.in_keys = [reduce_key]
-        self.out_keys = []
-
-    def forward(self, td):
-        # Can only reduce if the tensor is 1D
-        min_q = td.get(self.reduce_key).min(-1).values
-        reduced_td = td[0]
-        reduced_td[self.reduce_key] = min_q
-        return reduced_td
 
 class FinalLinear(nn.Linear):
     def reset_parameters(self):
         nn.init.normal_(self.weight.data, 0, 1e-4)
         self.bias.data.zero_()
         
-
-
-class TanhExp(nn.Module):
-    def forward(self, x):
-        return x * tanh(e^x)
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)

@@ -2,7 +2,7 @@ import copy
 import math
 import torch
 import tqdm
-from modules import MinReduce
+from linear_attention import LinearAttentionModule
 import popgym
 from utils import hard_update, soft_update, load_popgym_env, load_wrapped_popgym_env, truncate_trajectories
 import numpy as np
@@ -58,12 +58,12 @@ pre = nn.Sequential(
     nn.Mish(),
 ).to(device)
 target_pre = copy.deepcopy(pre).to(device)
-lstm = nn.LSTM(
-    input_size=config["recurrent_size"],
-    hidden_size=config["recurrent_size"],
-    batch_first=True,
-).to(device)
-target_lstm = copy.deepcopy(lstm).to(device)
+# lstm = nn.LSTM(
+#     input_size=config["recurrent_size"],
+#     hidden_size=config["recurrent_size"],
+#     batch_first=True,
+# ).to(device)
+#target_lstm = copy.deepcopy(lstm).to(device)
 post = nn.Sequential(
     nn.Mish(),
     nn.Linear(config["recurrent_size"], config["mlp_encoder_size"]),
@@ -74,11 +74,14 @@ post = nn.Sequential(
 # Modules
 state_mod = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
-    LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state").set_recurrent_mode(True)
+    #LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state").set_recurrent_mode(True)
+    LinearAttentionModule(in_key="embed", out_key="markov_state", input_size=config["recurrent_size"], hidden_size=config["recurrent_size"]),
 )
+lstm = state_mod[1].module
 target_state_mod = Seq(
     Mod(target_pre, in_keys=["observation"], out_keys=["embed"]),
-    LSTMModule(lstm=copy.deepcopy(lstm), in_key="embed", out_key="markov_state").set_recurrent_mode(True),
+    #LSTMModule(lstm=copy.deepcopy(lstm), in_key="embed", out_key="markov_state").set_recurrent_mode(True),
+    LinearAttentionModule(in_key="embed", out_key="markov_state", input_size=config["recurrent_size"], hidden_size=config["recurrent_size"]),
 )
 q_mod = Seq(
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
@@ -86,7 +89,8 @@ q_mod = Seq(
 )
 eval_policy = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
-    LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
+    #LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
+    LinearAttentionModule(in_key="embed", out_key="markov_state", input_size=config["recurrent_size"], hidden_size=config["recurrent_size"]),
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
     QValueModule(action_space=env.action_spec),
 )
@@ -175,10 +179,10 @@ for i, data in enumerate(collector, 1):
         state_mod(batch)
         # Prevent leaking learned network states into the target network
         # Otherwise s_0 from learned net will feed into target network at initial timestep
-        del (
-            batch[("next", "recurrent_state_c")],
-            batch[("next", "recurrent_state_h")],
-        )
+        # del (
+        #     batch[("next", "recurrent_state_s")],
+        #     batch[("next", "recurrent_state_z")],
+        # )
         with torch.no_grad():
             target_state_mod(batch["next"])
 

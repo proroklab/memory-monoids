@@ -3,15 +3,15 @@ seed: 0
 
 # Collection
 segment_length: 20
-epochs: 10_000
-random_epochs: 1_000
+epochs: 100
+random_epochs: 0
 
 # Training
-batch_size: 256
+batch_size: 8
 utd: 1
-buffer_size: 50_000 # In segments
+buffer_size: 1000 # In segments
 gamma: 0.99
-target_delay: 200 # In epochs/updates
+target_delay: 2 # In epochs/updates
 reward_scale: 1
 
 # Model

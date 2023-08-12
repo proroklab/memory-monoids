@@ -3,12 +3,24 @@ import math
 import torch
 import tqdm
 from linear_attention import LinearAttentionModule
+from losses import RDQNSegmentLoss
 import popgym
-from utils import hard_update, soft_update, load_popgym_env, load_wrapped_popgym_env, truncate_trajectories
+from utils import (
+    apply_primers,
+    hard_update,
+    soft_update,
+    load_popgym_env,
+    load_wrapped_popgym_env,
+    truncate_trajectories,
+)
 import numpy as np
 import gymnasium as gym
 import importlib
-from tensordict.nn import TensorDictModule as Mod, TensorDictSequential as Seq, EnsembleModule
+from tensordict.nn import (
+    TensorDictModule as Mod,
+    TensorDictSequential as Seq,
+    EnsembleModule,
+)
 from torch import nn
 from torchrl.collectors import SyncDataCollector
 import tensordict
@@ -25,28 +37,28 @@ class FinalLinear(nn.Linear):
     def reset_parameters(self):
         nn.init.normal_(self.weight.data, 0, 1e-4)
         self.bias.data.zero_()
-        
+
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
-a.add_argument("--seed", '-s', type=int, default=0)
-a.add_argument("--device", '-d', type=str, default='cpu')
+a.add_argument("--seed", "-s", type=int, default=0)
+a.add_argument("--device", "-d", type=str, default="cpu")
 args = a.parse_args()
 
 with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
-config['seed'] = args.seed
-config['device'] = args.device
-#config["epochs"] = config["total_frames"] // config["segment_length"]
+config["seed"] = args.seed
+config["device"] = args.device
+# config["epochs"] = config["total_frames"] // config["segment_length"]
 config["total_frames"] = config["epochs"] * config["segment_length"]
 config["total_random_frames"] = config["random_epochs"] * config["segment_length"]
 
 torch.manual_seed(config["seed"])
 
-device = torch.device(config['device']) 
+device = torch.device(config["device"])
 env = load_wrapped_popgym_env(config, device)
 eval_env = load_wrapped_popgym_env(config, device, eval=True)
-obs_shape = math.prod(env.observation_spec['observation'].shape)
+obs_shape = math.prod(env.observation_spec["observation"].shape)
 act_shape = env.action_space.n
 
 # Networks
@@ -63,7 +75,7 @@ target_pre = copy.deepcopy(pre).to(device)
 #     hidden_size=config["recurrent_size"],
 #     batch_first=True,
 # ).to(device)
-#target_lstm = copy.deepcopy(lstm).to(device)
+# target_lstm = copy.deepcopy(lstm).to(device)
 post = nn.Sequential(
     nn.Mish(),
     nn.Linear(config["recurrent_size"], config["mlp_encoder_size"]),
@@ -74,23 +86,72 @@ post = nn.Sequential(
 # Modules
 state_mod = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
-    #LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state").set_recurrent_mode(True)
-    LinearAttentionModule(in_key="embed", out_key="markov_state", input_size=config["recurrent_size"], hidden_size=config["recurrent_size"]),
+    # LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state").set_recurrent_mode(True)
+    LinearAttentionModule(
+        in_key="embed",
+        out_key="embed",
+        input_size=config["recurrent_size"],
+        hidden_size=config["recurrent_size"],
+        recurrent_keys=["recurrent_state_s0", "recurrent_state_z0"],
+        done_key=("collector", "mask"),
+    ).to(device),
+    LinearAttentionModule(
+        in_key="embed",
+        input_size=config["recurrent_size"],
+        hidden_size=config["recurrent_size"],
+        recurrent_keys=["recurrent_state_s1", "recurrent_state_z1"],
+        out_key="markov_state",
+        done_key=("collector", "mask"),
+    ).to(device),
 )
 lstm = state_mod[1].module
 target_state_mod = Seq(
     Mod(target_pre, in_keys=["observation"], out_keys=["embed"]),
-    #LSTMModule(lstm=copy.deepcopy(lstm), in_key="embed", out_key="markov_state").set_recurrent_mode(True),
-    LinearAttentionModule(in_key="embed", out_key="markov_state", input_size=config["recurrent_size"], hidden_size=config["recurrent_size"]),
+    # LSTMModule(lstm=copy.deepcopy(lstm), in_key="embed", out_key="markov_state").set_recurrent_mode(True),
+    LinearAttentionModule(
+        in_key="embed",
+        out_key="embed",
+        input_size=config["recurrent_size"],
+        hidden_size=config["recurrent_size"],
+        recurrent_keys=["recurrent_state_s0", "recurrent_state_z0"],
+        done_key=("collector", "mask"),
+    ).to(device),
+    LinearAttentionModule(
+        in_key="embed",
+        input_size=config["recurrent_size"],
+        hidden_size=config["recurrent_size"],
+        recurrent_keys=["recurrent_state_s1", "recurrent_state_z1"],
+        out_key="markov_state",
+        done_key=("collector", "mask"),
+    ).to(device),
 )
 q_mod = Seq(
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
     QValueModule(action_space=env.action_spec),
 )
+target_q_mod = Seq(
+    Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
+    QValueModule(action_space=env.action_spec),
+)
 eval_policy = Seq(
     Mod(pre, in_keys=["observation"], out_keys=["embed"]),
-    #LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
-    LinearAttentionModule(in_key="embed", out_key="markov_state", input_size=config["recurrent_size"], hidden_size=config["recurrent_size"]),
+    # LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
+    LinearAttentionModule(
+        in_key="embed",
+        out_key="embed",
+        input_size=config["recurrent_size"],
+        hidden_size=config["recurrent_size"],
+        recurrent_keys=["recurrent_state_s0", "recurrent_state_z0"],
+        done_key=("collector", "mask"),
+    ).to(device),
+    LinearAttentionModule(
+        in_key="embed",
+        input_size=config["recurrent_size"],
+        hidden_size=config["recurrent_size"],
+        recurrent_keys=["recurrent_state_s1", "recurrent_state_z1"],
+        out_key="markov_state",
+        done_key=("collector", "mask"),
+    ).to(device),
     Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
     QValueModule(action_space=env.action_spec),
 )
@@ -101,18 +162,25 @@ policy = EGreedyWrapper(
     eps_init=config["eps_init"],
     eps_end=config["eps_end"],
 )
-loss_fn = DQNLoss(
+# loss_fn = DQNLoss(
+#     q_mod,
+#     delay_value=True,
+#     action_space=env.action_spec,
+# )
+loss_fn = RDQNSegmentLoss(
+    state_mod,
+    target_state_mod,
     q_mod,
-    delay_value=True,
-    action_space=env.action_spec,
+    target_q_mod,
+    env.action_spec,
+    
 )
-updater = HardUpdate(loss_fn, value_network_update_interval=config["target_delay"])
+#updater = HardUpdate(loss_fn, value_network_update_interval=config["target_delay"])
 
-if hasattr(state_mod[1], "make_tensordict_primer"):
-    env.append_transform(state_mod[1].make_tensordict_primer())
-    eval_env.append_transform(state_mod[1].make_tensordict_primer())
-
+env = apply_primers(env, state_mod)
+eval_env = apply_primers(eval_env, state_mod)
 state_mod(env.reset())
+
 
 optim = torch.optim.AdamW(
     [*pre.parameters(), *lstm.parameters(), *post.parameters()], lr=config["lr"]
@@ -130,7 +198,7 @@ eval_collector = SyncDataCollector(
     eval_policy,
     frames_per_batch=config["eval_length"],
     total_frames=config["total_frames"],
-    #split_trajs=True,
+    # split_trajs=True,
     init_random_frames=0,
     reset_at_each_iter=True,
 )
@@ -158,53 +226,64 @@ for i, data in enumerate(collector, 1):
     pbar.update()
     # it is important to pass data that is not flattened
     # TODO: data is often longer than this, what does padding do?
-    #truncate_trajectories(data, config["segment_length"])
+    # truncate_trajectories(data, config["segment_length"])
     padded = tensordict.pad(data, [0, 0, 0, config["segment_length"] - data.shape[-1]])
     rb.extend(padded.cpu())
-    unpadded_data = data.masked_select(data[('collector', 'mask')])
+    unpadded_data = data.masked_select(data[("collector", "mask")])
     if collector._frames < config["total_random_frames"]:
         continue
-    mean_reward = unpadded_data["episode_reward"][unpadded_data[("next", "done")]].mean()
+    mean_reward = unpadded_data["episode_reward"][
+        unpadded_data[("next", "done")]
+    ].mean()
     if mean_reward > best_reward:
         best_reward = mean_reward
     for u in range(config["utd"]):
         if i % config["reset_interval"] == 0:
             lstm.reset_parameters()
-            pre.apply(lambda x: x.reset_parameters() if hasattr(x, "reset_parameters") else None)
-            post.apply(lambda x: x.reset_parameters() if hasattr(x, "reset_parameters") else None)
-            
+            pre.apply(
+                lambda x: x.reset_parameters()
+                if hasattr(x, "reset_parameters")
+                else None
+            )
+            post.apply(
+                lambda x: x.reset_parameters()
+                if hasattr(x, "reset_parameters")
+                else None
+            )
+
         batch = rb.sample().to(device)
-        # Do not use stale states
-        # del batch['recurrent_state_c'], batch['recurrent_state_h'], batch[('next', 'recurrent_state_c')], batch[('next', 'recurrent_state_h')]
-        state_mod(batch)
-        # Prevent leaking learned network states into the target network
-        # Otherwise s_0 from learned net will feed into target network at initial timestep
-        # del (
-        #     batch[("next", "recurrent_state_s")],
-        #     batch[("next", "recurrent_state_z")],
-        # )
-        with torch.no_grad():
-            target_state_mod(batch["next"])
+        loss = loss_fn(batch)
+        # # Do not use stale states
+        # # del batch['recurrent_state_c'], batch['recurrent_state_h'], batch[('next', 'recurrent_state_c')], batch[('next', 'recurrent_state_h')]
+        # state_mod(batch)
+        # # Prevent leaking learned network states into the target network
+        # # Otherwise s_0 from learned net will feed into target network at initial timestep
+        # # del (
+        # #     batch[("next", "recurrent_state_s")],
+        # #     batch[("next", "recurrent_state_z")],
+        # # )
+        # with torch.no_grad():
+        #     target_state_mod(batch["next"])
 
-        # Replace stored states as target will have overwritten them
-        #batch.update(stored_states)
-        # Compute markov_state
-        mask = batch[("collector", "mask")]
-        masked = batch.masked_select(mask)
-        loss = loss_fn(masked)
+        # # Replace stored states as target will have overwritten them
+        # # batch.update(stored_states)
+        # # Compute markov_state
+        # mask = batch[("collector", "mask")]
+        # masked = batch.masked_select(mask)
+        # loss = loss_fn(masked)
 
-        loss['loss'].backward()
+        loss["loss"].backward()
         optim.step()
         optim.zero_grad()
 
-        #soft_update(target_state_mod, state_mod, config["tau"])
+        # soft_update(target_state_mod, state_mod, config["tau"])
         hard_update(
-            target_state_mod, 
-            state_mod, 
-            config["target_delay"], 
-            i * config["utd"] + u
+            target_state_mod, state_mod, config["target_delay"], i * config["utd"] + u
         )
-        updater.step()
+        hard_update(
+            target_q_mod, q_mod, config["target_delay"], i * config["utd"] + u
+        )
+        #updater.step()
 
     pbar.set_description(
         f"loss: {loss['loss'].item():.3f}, rew(c:{mean_reward:.2f}, b:{best_reward:.2f}), eval rew: (c:{eval_reward:.2f}, b:{best_eval_reward:.2f})"
@@ -214,7 +293,7 @@ for i, data in enumerate(collector, 1):
 
     to_log = {
         **to_log,
-        "train/loss": loss['loss'].item(),
+        "train/loss": loss["loss"].item(),
         "train/best_reward": best_reward,
         "train/epsilon": policy.eps,
         "train/buffer_size": len(rb),

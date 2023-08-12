@@ -3,7 +3,7 @@ import torch
 from tensordict.nn import TensorDictModuleBase
 from typing import Optional, Tuple, List
 from torchrl.envs import TensorDictPrimer
-from torchrl.data import UnboundedContinuousTensorSpec
+from torchrl.data import UnboundedContinuousTensorSpec, BoundedTensorSpec
 
 
 def prepend_zero(x, dim=0):
@@ -11,10 +11,12 @@ def prepend_zero(x, dim=0):
     zero = torch.zeros(shape, dtype=x.dtype, device=x.device)
     return torch.cat([zero, x], dim=dim)
 
+
 def append_zero(x, dim=0):
     shape = x.shape[:dim] + (1,) + x.shape[dim + 1 :]
     zero = torch.zeros(shape, dtype=x.dtype, device=x.device)
     return torch.cat([x, zero], dim=dim)
+
 
 def kernel_space_reset(state, done, time_dim=0):
     # Do we have a done at the next timestep?
@@ -31,14 +33,22 @@ def kernel_space_reset(state, done, time_dim=0):
     # We don't want to reset the first sequence, so prepend zeros
     # for the previous (non-visible) terminal state
     terminal_states = prepend_zero(terminal_states)
-    #resetter = terminal_states[sequence_idx]
+    # resetter = terminal_states[sequence_idx]
     resetter = terminal_states.index_select(time_dim, sequence_idx)
     reset_state = state - resetter
     return reset_state
 
 
 class LinearAttentionModule(TensorDictModuleBase):
-    def __init__(self, input_size, hidden_size, in_key="embed", recurrent_keys=["recurrent_state_s", "recurrent_state_z"], out_key="action_value", done_key=("collector", "mask")):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        in_key="embed",
+        recurrent_keys=["recurrent_state_s", "recurrent_state_z"],
+        out_key="action_value",
+        done_key=("collector", "mask"),
+    ):
         super().__init__()
         self.in_keys = [in_key, *recurrent_keys, done_key]
         self.recurrent_keys = recurrent_keys
@@ -78,17 +88,25 @@ class LinearAttentionModule(TensorDictModuleBase):
         return self
 
     def make_tensordict_primer(self):
-        return TensorDictPrimer(
+        p_s = TensorDictPrimer(
             {
                 self.recurrent_keys[0]: UnboundedContinuousTensorSpec(
                     shape=(self.hidden_size, self.hidden_size),
                 ),
-                self.recurrent_keys[1]: UnboundedContinuousTensorSpec(
-
-                    shape=(1, self.hidden_size),
-                )
             }
         )
+        p_z = TensorDictPrimer(
+            {
+                self.recurrent_keys[1]: BoundedTensorSpec(
+                    shape=(1, self.hidden_size),
+                    minimum=1,
+                    maximum=torch.inf,
+                )
+            },
+            default_value=1.0,
+        )
+        return p_s, p_z
+
 
 class LinearAttentionBlock(nn.Module):
     """
@@ -127,13 +145,16 @@ class LinearAttentionBlock(nn.Module):
                 nn.Linear(hidden_size, hidden_size),
                 nn.ReLU(inplace=True),
                 nn.Linear(hidden_size, hidden_size),
-                nn.ReLU(inplace=True)
+                nn.ReLU(inplace=True),
             )
         if self.residual:
             self.shortcut = nn.Linear(input_size, hidden_size)
 
     def forward(
-        self, x: torch.Tensor, state: List[torch.Tensor], done: Optional[torch.Tensor] = None
+        self,
+        x: torch.Tensor,
+        state: List[torch.Tensor],
+        done: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """
         Input:
@@ -150,7 +171,7 @@ class LinearAttentionBlock(nn.Module):
             ]
         """
 
-        #done = done or torch.zeros(x.shape[:2], device=x.device, dtype=torch.bool)
+        # done = done or torch.zeros(x.shape[:2], device=x.device, dtype=torch.bool)
         x = self.norm(x)
         K = self.phi(self.key(x))
         Q = self.phi(self.query(x))
@@ -162,8 +183,8 @@ class LinearAttentionBlock(nn.Module):
         B, T, F = K.shape
 
         # S = sum(K V^T)
-        S = (torch.einsum("bti, btj -> btij", K, V).cumsum(dim=-3) + S)
-        Z = (K.reshape(B, T, 1, F) + Z.cumsum(dim=-3))
+        S = torch.einsum("bti, btj -> btij", K, V).cumsum(dim=-3) + S
+        Z = K.reshape(B, T, 1, F) + Z.cumsum(dim=-3)
         if done:
             # TODO S and Z are off by one because of the added S and Z at the beginning
             S = kernel_space_reset(S, done)
@@ -178,8 +199,12 @@ class LinearAttentionBlock(nn.Module):
         # numerator = Q^T S
         numerator = torch.einsum("bti, btil -> btl", Q, S)
         # denominator = Q^T Z
-        denominator = torch.einsum("bti, btl -> bt", Q, Z.reshape(B, T, F)).reshape(B, T, 1) 
-        denominator = torch.sign(denominator) * torch.clamp(torch.abs(denominator), min=1e-8)
+        denominator = torch.einsum("bti, btl -> bt", Q, Z.reshape(B, T, F)).reshape(
+            B, T, 1
+        )
+        denominator = torch.sign(denominator) * torch.clamp(
+            torch.abs(denominator), min=1e-4
+        )
         # output = (Q^T S) / (Q^T Z)
         output = numerator / denominator
 

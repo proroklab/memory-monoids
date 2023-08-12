@@ -12,6 +12,17 @@ from torchrl.envs import (
 )
 
 
+def apply_primers(env, modules):
+    for m in modules:
+        if hasattr(m, "make_tensordict_primer"):
+            primers = m.make_tensordict_primer()
+            if not isinstance(primers, (list, tuple)):
+                primers = [primers]
+            for p in primers:
+                env.append_transform(p)
+    return env
+
+
 def soft_update(target, source, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)

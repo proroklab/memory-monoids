@@ -47,17 +47,21 @@ class LinearAttentionModule(TensorDictModuleBase):
         in_key="embed",
         recurrent_keys=["recurrent_state_s", "recurrent_state_z"],
         out_key="action_value",
-        done_key=("collector", "mask"),
+        done_key=None,
+        **block_kwargs,
     ):
         super().__init__()
-        self.in_keys = [in_key, *recurrent_keys, done_key]
+        self.in_keys = [in_key, *recurrent_keys]
+        if done_key:
+            self.in_keys.append(done_key)
         self.recurrent_keys = recurrent_keys
         self.done_key = done_key
         out_rkeys = [("next", key) for key in recurrent_keys]
         self.out_keys = [out_key, *out_rkeys]
         self.hidden_size = hidden_size
         self.input_size = input_size
-        self.module = LinearAttentionBlock(input_size, hidden_size)
+        self.module = LinearAttentionBlock(input_size, hidden_size, **block_kwargs)
+        self.batched_mode = False
 
     def forward(self, td):
         x = td.get(self.in_keys[0])
@@ -71,6 +75,11 @@ class LinearAttentionModule(TensorDictModuleBase):
             z_state = z_state.unsqueeze(0)
             num_squeezes += 1
 
+        if self.batched_mode:
+            # Do not use prior states
+            s_state = torch.zeros_like(s_state[..., -1:, :, :])
+            z_state = torch.ones_like(z_state[..., -1:, :, :])
+            # Squeeze dims to size 1 time
         y, state = self.module(x, [s_state, z_state])
         s_state, z_state = state
 
@@ -84,28 +93,23 @@ class LinearAttentionModule(TensorDictModuleBase):
         td[self.out_keys[2]] = z_state
         return td
 
-    def temporal_mode(self, value):
+    def set_recurrent_mode(self, value):
+        self.batched_mode = value
         return self
 
+
     def make_tensordict_primer(self):
-        p_s = TensorDictPrimer(
+        p = TensorDictPrimer(
             {
                 self.recurrent_keys[0]: UnboundedContinuousTensorSpec(
                     shape=(self.hidden_size, self.hidden_size),
                 ),
+                self.recurrent_keys[1]: UnboundedContinuousTensorSpec(
+                    shape=(1, self.hidden_size),
+                ),
             }
         )
-        p_z = TensorDictPrimer(
-            {
-                self.recurrent_keys[1]: BoundedTensorSpec(
-                    shape=(1, self.hidden_size),
-                    minimum=1,
-                    maximum=torch.inf,
-                )
-            },
-            default_value=1.0,
-        )
-        return p_s, p_z
+        return p
 
 
 class LinearAttentionBlock(nn.Module):
@@ -184,7 +188,7 @@ class LinearAttentionBlock(nn.Module):
 
         # S = sum(K V^T)
         S = torch.einsum("bti, btj -> btij", K, V).cumsum(dim=-3) + S
-        Z = K.reshape(B, T, 1, F) + Z.cumsum(dim=-3)
+        Z = K.reshape(B, T, 1, F).cumsum(dim=-3) + Z
         if done:
             # TODO S and Z are off by one because of the added S and Z at the beginning
             S = kernel_space_reset(S, done)

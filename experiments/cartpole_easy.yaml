@@ -1,5 +1,7 @@
-env: "popgym.envs.PositionOnlyCartPoleEasy"
+env: "popgym.envs.StatelessCartPoleEasy"
 seed: 0
+memory_name: "lstm"
+wandb: True
 
 # Collection
 segment_length: 20

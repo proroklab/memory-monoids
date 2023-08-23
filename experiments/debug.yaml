@@ -1,5 +1,7 @@
-env: "popgym.envs.PositionOnlyCartPoleEasy"
+env: "popgym.envs.StatelessCartPoleEasy"
 seed: 0
+#memory_name: linear_attention
+memory_name: lstm 
 
 # Collection
 segment_length: 20
@@ -13,6 +15,7 @@ buffer_size: 1000 # In segments
 gamma: 0.99
 target_delay: 2 # In epochs/updates
 reward_scale: 1
+wandb: False
 
 # Model
 mlp_encoder_size: 64

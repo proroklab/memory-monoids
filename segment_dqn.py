@@ -2,11 +2,11 @@ import copy
 import math
 import torch
 import tqdm
-from linear_attention import LinearAttentionModule
 from losses import RDQNSegmentLoss
 import popgym
 from utils import (
     apply_primers,
+    get_modules,
     hard_update,
     soft_update,
     load_popgym_env,
@@ -33,11 +33,6 @@ import yaml
 import argparse
 
 
-class FinalLinear(nn.Linear):
-    def reset_parameters(self):
-        nn.init.normal_(self.weight.data, 0, 1e-4)
-        self.bias.data.zero_()
-
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
@@ -58,103 +53,15 @@ torch.manual_seed(config["seed"])
 device = torch.device(config["device"])
 env = load_wrapped_popgym_env(config, device)
 eval_env = load_wrapped_popgym_env(config, device, eval=True)
-obs_shape = math.prod(env.observation_spec["observation"].shape)
-act_shape = env.action_space.n
 
-# Networks
-pre = nn.Sequential(
-    nn.Linear(obs_shape, config["mlp_encoder_size"]),
-    nn.Mish(),
-    nn.Linear(config["mlp_encoder_size"], config["recurrent_size"]),
-    nn.LayerNorm(config["recurrent_size"], elementwise_affine=False),
-    nn.Mish(),
-).to(device)
-target_pre = copy.deepcopy(pre).to(device)
-# lstm = nn.LSTM(
-#     input_size=config["recurrent_size"],
-#     hidden_size=config["recurrent_size"],
-#     batch_first=True,
-# ).to(device)
-# target_lstm = copy.deepcopy(lstm).to(device)
-post = nn.Sequential(
-    nn.Mish(),
-    nn.Linear(config["recurrent_size"], config["mlp_encoder_size"]),
-    nn.Mish(),
-    FinalLinear(config["mlp_encoder_size"], act_shape),
-).to(device)
 
-# Modules
-state_mod = Seq(
-    Mod(pre, in_keys=["observation"], out_keys=["embed"]),
-    # LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state").set_recurrent_mode(True)
-    LinearAttentionModule(
-        in_key="embed",
-        out_key="embed",
-        input_size=config["recurrent_size"],
-        hidden_size=config["recurrent_size"],
-        recurrent_keys=["recurrent_state_s0", "recurrent_state_z0"],
-        done_key=("collector", "mask"),
-    ).to(device),
-    LinearAttentionModule(
-        in_key="embed",
-        input_size=config["recurrent_size"],
-        hidden_size=config["recurrent_size"],
-        recurrent_keys=["recurrent_state_s1", "recurrent_state_z1"],
-        out_key="markov_state",
-        done_key=("collector", "mask"),
-    ).to(device),
-)
-lstm = state_mod[1].module
-target_state_mod = Seq(
-    Mod(target_pre, in_keys=["observation"], out_keys=["embed"]),
-    # LSTMModule(lstm=copy.deepcopy(lstm), in_key="embed", out_key="markov_state").set_recurrent_mode(True),
-    LinearAttentionModule(
-        in_key="embed",
-        out_key="embed",
-        input_size=config["recurrent_size"],
-        hidden_size=config["recurrent_size"],
-        recurrent_keys=["recurrent_state_s0", "recurrent_state_z0"],
-        done_key=("collector", "mask"),
-    ).to(device),
-    LinearAttentionModule(
-        in_key="embed",
-        input_size=config["recurrent_size"],
-        hidden_size=config["recurrent_size"],
-        recurrent_keys=["recurrent_state_s1", "recurrent_state_z1"],
-        out_key="markov_state",
-        done_key=("collector", "mask"),
-    ).to(device),
-)
-q_mod = Seq(
-    Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
-    QValueModule(action_space=env.action_spec),
-)
-target_q_mod = Seq(
-    Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
-    QValueModule(action_space=env.action_spec),
-)
-eval_policy = Seq(
-    Mod(pre, in_keys=["observation"], out_keys=["embed"]),
-    # LSTMModule(lstm=lstm, in_key="embed", out_key="markov_state"),
-    LinearAttentionModule(
-        in_key="embed",
-        out_key="embed",
-        input_size=config["recurrent_size"],
-        hidden_size=config["recurrent_size"],
-        recurrent_keys=["recurrent_state_s0", "recurrent_state_z0"],
-        done_key=("collector", "mask"),
-    ).to(device),
-    LinearAttentionModule(
-        in_key="embed",
-        input_size=config["recurrent_size"],
-        hidden_size=config["recurrent_size"],
-        recurrent_keys=["recurrent_state_s1", "recurrent_state_z1"],
-        out_key="markov_state",
-        done_key=("collector", "mask"),
-    ).to(device),
-    Mod(post, in_keys=["markov_state"], out_keys=["action_value"]),
-    QValueModule(action_space=env.action_spec),
-)
+# state_mod, q_mod, target_state_mod, target_q_mod= get_modules(config, env, training=True)
+# policy_state_mod, policy_q_mod, _, _ = get_modules(config, env, training=False)
+module = get_modules(config, env, training=True)
+eval_policy = get_modules(config, env, training=False)
+env = apply_primers(env, module[1])
+eval_env = apply_primers(eval_env, module[1])
+#eval_policy = Seq(policy_state_mod, policy_q_mod)
 policy = EGreedyWrapper(
     eval_policy,
     annealing_num_steps=config["epochs"],
@@ -162,28 +69,28 @@ policy = EGreedyWrapper(
     eps_init=config["eps_init"],
     eps_end=config["eps_end"],
 )
-# loss_fn = DQNLoss(
-#     q_mod,
-#     delay_value=True,
-#     action_space=env.action_spec,
-# )
-loss_fn = RDQNSegmentLoss(
-    state_mod,
-    target_state_mod,
-    q_mod,
-    target_q_mod,
-    env.action_spec,
-    
-)
-#updater = HardUpdate(loss_fn, value_network_update_interval=config["target_delay"])
 
-env = apply_primers(env, state_mod)
-eval_env = apply_primers(eval_env, state_mod)
-state_mod(env.reset())
+loss_fn = RDQNSegmentLoss(
+    module,
+    delay_value=True,
+    action_space=env.action_spec,
+)
+# loss_fn = RDQNSegmentLoss(
+#     state_mod,
+#     target_state_mod,
+#     q_mod,
+#     target_q_mod,
+#     env.action_spec,
+    
+# )
+updater = HardUpdate(loss_fn, value_network_update_interval=config["target_delay"])
+
 
 
 optim = torch.optim.AdamW(
-    [*pre.parameters(), *lstm.parameters(), *post.parameters()], lr=config["lr"]
+    module.parameters(), lr=config["lr"]
+    #[*pre.parameters(), *lstm.parameters(), *post.parameters()], lr=config["lr"]
+    #[*state_mod.parameters(), *q_mod.parameters()], lr=config["lr"]
 )
 collector = SyncDataCollector(
     env,
@@ -215,7 +122,8 @@ eval_reward = -float("inf")
 best_eval_reward = -float("inf")
 nonzero_frames = 0
 
-wandb.init(project="rdqn_segment", config=config)
+if config["wandb"]:
+    wandb.init(project="rdqn_segment", config=config)
 for i, data in enumerate(collector, 1):
     frames_this_iter = data[("collector", "mask")].sum()
     nonzero_frames += frames_this_iter
@@ -227,6 +135,9 @@ for i, data in enumerate(collector, 1):
     # it is important to pass data that is not flattened
     # TODO: data is often longer than this, what does padding do?
     # truncate_trajectories(data, config["segment_length"])
+    # Do not store recurrent states as we want zero-states
+    data = data.exclude(*module.recurrent_keys)
+    data['next'] = data['next'].exclude(*module.recurrent_keys)
     padded = tensordict.pad(data, [0, 0, 0, config["segment_length"] - data.shape[-1]])
     rb.extend(padded.cpu())
     unpadded_data = data.masked_select(data[("collector", "mask")])
@@ -239,17 +150,7 @@ for i, data in enumerate(collector, 1):
         best_reward = mean_reward
     for u in range(config["utd"]):
         if i % config["reset_interval"] == 0:
-            lstm.reset_parameters()
-            pre.apply(
-                lambda x: x.reset_parameters()
-                if hasattr(x, "reset_parameters")
-                else None
-            )
-            post.apply(
-                lambda x: x.reset_parameters()
-                if hasattr(x, "reset_parameters")
-                else None
-            )
+            module.reset_parameters_recursive()
 
         batch = rb.sample().to(device)
         loss = loss_fn(batch)
@@ -277,13 +178,13 @@ for i, data in enumerate(collector, 1):
         optim.zero_grad()
 
         # soft_update(target_state_mod, state_mod, config["tau"])
-        hard_update(
-            target_state_mod, state_mod, config["target_delay"], i * config["utd"] + u
-        )
-        hard_update(
-            target_q_mod, q_mod, config["target_delay"], i * config["utd"] + u
-        )
-        #updater.step()
+        # hard_update(
+        #     target_state_mod, state_mod, config["target_delay"], i * config["utd"] + u
+        # )
+        # hard_update(
+        #     target_q_mod, q_mod, config["target_delay"], i * config["utd"] + u
+        # )
+        updater.step()
 
     pbar.set_description(
         f"loss: {loss['loss'].item():.3f}, rew(c:{mean_reward:.2f}, b:{best_reward:.2f}), eval rew: (c:{eval_reward:.2f}, b:{best_eval_reward:.2f})"
@@ -301,10 +202,10 @@ for i, data in enumerate(collector, 1):
         "collector/action_histogram": wandb.Histogram(data["action"].cpu()),
     }
     policy.step(1)
-    collector.update_policy_weights_()
+    collector.policy.module.load_state_dict(module.module.state_dict())
 
     if i % config["eval_interval"] == 0:
-        eval_collector.update_policy_weights_()
+        eval_collector.policy.load_state_dict(module.state_dict())
         rollout = next(eval_collector.iterator())
 
         # unpadded_rollout = data.masked_select(data[('collector', 'mask')])
@@ -316,6 +217,8 @@ for i, data in enumerate(collector, 1):
             **to_log,
             "eval/reward": eval_reward,
             "eval/best_reward": best_eval_reward,
+            "eval/num_episodes": rollout[('next', 'done')].sum(),
         }
 
-    wandb.log(to_log)
+    if config["wandb"]:
+        wandb.log(to_log)

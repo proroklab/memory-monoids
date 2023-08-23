@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Any, Callable, Dict
 import jax
 import equinox as eqx
 from equinox import nn
@@ -21,30 +21,28 @@ class FinalLinear(eqx.Module):
         return x @ self.weight + self.bias
 
 
-class QNetwork(eqx.Module):
+class GRUQNetwork(eqx.Module):
     input_size: int
-    output_size: int
-    state_size: int
-    hidden_size: int
+    output_size: int 
+    config: Dict[str, Any]
     pre: eqx.Module
     memory: eqx.Module
     post: eqx.Module
 
-    def __init__(self, obs_shape, mlp_size, recurrent_size, act_shape, key):
+    def __init__(self, obs_shape, act_shape, config, key):
+        self.config = config
         self.input_size = obs_shape
         self.output_size = act_shape
-        self.state_size = recurrent_size
-        self.hidden_size = mlp_size
         keys = random.split(key, 5)
-        self.pre = nn.Sequential([nn.Linear(obs_shape, mlp_size, key=keys[0]), mish])
-        self.memory = nn.GRUCell(mlp_size, self.state_size, key=keys[1])
+        self.pre = nn.Sequential([nn.Linear(obs_shape, config['mlp_size'], key=keys[0]), mish])
+        self.memory = nn.GRUCell(config['mlp_size'], self.config['recurrent_size'], key=keys[1])
         self.post = nn.Sequential(
             [
-                nn.Linear(self.state_size, self.hidden_size, key=keys[2]),
+                nn.Linear(self.config['recurrent_size'], self.config['mlp_size'], key=keys[2]),
                 mish,
-                nn.Linear(self.hidden_size, self.hidden_size, key=keys[3]),
+                nn.Linear(self.config['mlp_size'], self.config['mlp_size'], key=keys[3]),
                 mish,
-                FinalLinear(self.hidden_size, self.output_size, key=keys[4])
+                FinalLinear(self.config['mlp_size'], self.output_size, key=keys[4])
             ]
         )
 
@@ -62,7 +60,7 @@ class QNetwork(eqx.Module):
 
     @eqx.filter_jit
     def initial_state(self, shape=tuple()):
-        return jnp.zeros((*shape, self.state_size), dtype=jnp.float32)
+        return jnp.zeros((*shape, self.config['recurrent_size']), dtype=jnp.float32)
 
 
 @jax.jit

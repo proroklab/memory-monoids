@@ -1,6 +1,7 @@
 import importlib
 from popgym.wrappers import Antialias, PreviousAction, Flatten, DiscreteAction
 import gymnasium as gym
+import jax
 
 
 def load_popgym_env(config, eval=False):
@@ -20,3 +21,10 @@ def filter_inf(log_dict):
         if k != float('-inf'):
             d[k] = v
     return d
+
+@jax.jit
+def expand_right(src, shape):
+    a_dims = len(src.shape)
+    b_dims = len(shape)
+    right = [1] * (a_dims - b_dims)
+    return src.reshape(*src.shape, *right)

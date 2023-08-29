@@ -21,10 +21,14 @@ import argparse
 import yaml
 
 from modules import GRUQNetwork, epsilon_greedy_policy, anneal
-from utils import load_popgym_env, filter_inf
-from losses import dqn_loss
+from linear_transformer import LTQNetwork
+from utils import load_popgym_env
+from losses import segment_dqn_loss
 
-
+model_map = {
+    GRUQNetwork.name: GRUQNetwork,
+    LTQNetwork.name: LTQNetwork
+}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
@@ -66,6 +70,7 @@ rb = ReplayBuffer(
             "shape": (config['collect']['segment_length'], obs_shape),
             "dtype": jnp.float32,
         },
+        "start": {"shape": config['collect']['segment_length'], "dtype": bool},
         "done": {"shape": config['collect']['segment_length'], "dtype": bool},
         "mask": {"shape": config['collect']['segment_length'], "dtype": bool},
     },
@@ -73,8 +78,9 @@ rb = ReplayBuffer(
 
 
 key, *keys = random.split(key, 3)
-q_network = GRUQNetwork(obs_shape, act_shape, config['model'], keys[0])
-q_target = GRUQNetwork(obs_shape, act_shape, config['model'], keys[0])
+model_class = model_map[config['model']['name']]
+q_network = model_class(obs_shape, act_shape, config['model'], keys[0])
+q_target = model_class(obs_shape, act_shape, config['model'], keys[0])
 opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
 epochs = tqdm.tqdm(range(1, config['collect']['random_epochs'] + config['collect']['epochs'] + 1))
 best_eval_reward = best_cumulative_reward = eval_reward = -np.inf
@@ -91,6 +97,7 @@ for epoch in epochs:
         actions,
         rewards,
         next_observations,
+        starts,
         dones,
         mask,
         cumulative_reward,
@@ -103,6 +110,7 @@ for epoch in epochs:
         action=actions,
         reward=rewards,
         next_observation=next_observations,
+        start=starts,
         done=dones,
         mask=mask,
     )
@@ -114,7 +122,7 @@ for epoch in epochs:
 
     data = rb.sample(config['train']['batch_size'])
     transitions_trained += data['mask'].sum()
-    outputs, gradient = dqn_loss(q_network, q_target, data, config['train']['gamma'])
+    outputs, gradient = segment_dqn_loss(q_network, q_target, data, config['train']['gamma'])
     loss, (q_mean, target_mean, target_network_mean) = outputs
     updates, opt_state = opt.update(
         gradient, opt_state, params=eqx.partition(q_network, eqx.is_inexact_array)[0]
@@ -162,5 +170,4 @@ for epoch in epochs:
         + f"buf: {rb.get_stored_size() / config['train']['buffer_size']:.2f} "
         + f"qm: {q_mean:.2f} "
         + f"tm: {target_mean:.2f} "
-        + f"qtm: {target_network_mean:.2f} "
     )

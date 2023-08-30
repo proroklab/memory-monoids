@@ -1,5 +1,5 @@
 import importlib
-from popgym.wrappers import Antialias, PreviousAction, Flatten, DiscreteAction
+from popgym.wrappers import Antialias, PreviousAction, Flatten, DiscreteAction, EpisodeStart
 import gymnasium as gym
 import jax
 
@@ -11,6 +11,7 @@ def load_popgym_env(config, eval=False):
     instance = Flatten(Antialias(PreviousAction(instance)))
     if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
         instance = DiscreteAction(instance)
+    instance = EpisodeStart(instance)
     instance.action_space.seed(config["seed"] + eval * 1000)
 
     return instance

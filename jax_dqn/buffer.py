@@ -4,26 +4,32 @@ import random
 
 
 class ReplayBuffer:
-    def __init__(self, schema: Dict, buffer_size: int):
+    """A standard replay buffer using uniform sampling. This
+    may be used to implement a segment-based buffer."""
+    def __init__(self, buffer_size: int, schema: Dict[str, np.shape]):
         self.data: Dict[str, np.ndarray] = {}
         self.dtypes: Dict[str, np.dtype] = {}
         self.ptr = 0
         self.size = 0
         self.max_size = buffer_size
         for k, v in schema.items():
-            self.data[k] = np.zeros((buffer_size, *v['shape']), dtype=v['dtype'])
+            shape = v['shape']
+            if isinstance(shape, int):
+                shape = (shape,)
+            self.data[k] = np.zeros((buffer_size, *shape), dtype=v['dtype'])
 
     def __len__(self):
         return self.size
     
-    def sample(self, size: int):
+    def sample(self, size: int) -> Dict[str, np.ndarray]:
         out = {}
         idx = np.random.randint(low=0, high=self.size, size=size)
         for k, v in self.data.items():
             out[k] = v[idx]
         return out
 
-    def extend(self, data: Dict[str, np.ndarray]):
+    #def add(self, data: Dict[str, np.ndarray]) -> None:
+    def add(self, **data) -> None:
         for k, v in data.items():
             assert k in self.data
             if v.ndim > 1 or self.data[k].ndim > 1:
@@ -41,16 +47,17 @@ class ReplayBuffer:
             assert k in data
 
         for k, v in data.items():
-            self.data[k][idx] = v
+            self.data[k][idx] = np.array(v, copy=False)
 
 
 class TapeBuffer(ReplayBuffer):
-    def __init__(self, schema: Dict, buffer_size: int, start_key: str):
-        super().__init__(schema, buffer_size)
+    def __init__(self, buffer_size: int, start_key: str, schema: Dict[str, np.shape]):
+        super().__init__(buffer_size, schema)
         self.episode_starts = []
         self.start_key = start_key
+        assert self.data[start_key].ndim == 1
 
-    def sample(self, size: int):
+    def sample(self, size: int) -> Dict[str, np.ndarray]:
         out = {}
         # TODO: Should not sample between ptr and the next index
         # This region is guaranteed to be corrupted
@@ -60,7 +67,8 @@ class TapeBuffer(ReplayBuffer):
             out[k] = v[idx]
         return out
 
-    def extend(self, data: Dict[str, np.ndarray]):
+    #def add(self, data: Dict[str, np.ndarray]) -> None:
+    def add(self, **data) -> None:
         for k in self.data:
             assert k in data
 
@@ -93,46 +101,46 @@ class TapeBuffer(ReplayBuffer):
         self.size = min(self.size + batch_size, self.max_size)
 
         for k, v in data.items():
-            self.data[k][idx] = v
+            self.data[k][idx] = np.array(v, copy=False)
 
 
 
 
-b = ReplayBuffer({
-    "a": {"shape": (2,3), "dtype": np.int32},
-    "b": {"shape": (3,4), "dtype": np.float32}
-}, 10)
-data = {
-    "a": np.ones((5,2,3)),
-    "b": np.ones((5,3,4))
-}
-b.extend(data)
+if __name__ == '__main__':
+    b = ReplayBuffer({
+        "a": {"shape": (2,3), "dtype": np.int32},
+        "b": {"shape": (3,4), "dtype": np.float32}
+    }, 10)
+    data = {
+        "a": np.ones((5,2,3)),
+        "b": np.ones((5,3,4))
+    }
+    b.extend(data)
 
-b.sample(2)
+    b.sample(2)
 
-b = TapeBuffer({
-    "a": {"shape": (2,3), "dtype": np.int32},
-    "b": {"shape": (3,4), "dtype": np.float32},
-    "start": {"shape":(), "dtype": bool}
-}, 10, "start")
-start0 = np.array(
-    [True, False, False, True, False]
-)
-data = {
-    "a": np.arange(5*2*3).reshape((5,2,3)),
-    "b": np.arange(5*3*4).reshape((5,3,4)),
-    "start": start0
-}
-b.extend(data)
+    b = TapeBuffer({
+        "a": {"shape": (2,3), "dtype": np.int32},
+        "b": {"shape": (3,4), "dtype": np.float32},
+        "start": {"shape":(), "dtype": bool}
+    }, 10, "start")
+    start0 = np.array(
+        [True, False, False, True, False]
+    )
+    data = {
+        "a": np.arange(5*2*3).reshape((5,2,3)),
+        "b": np.arange(5*3*4).reshape((5,3,4)),
+        "start": start0
+    }
+    b.extend(data)
 
-start1 = np.array(
-    [True, False]
-)
-data2 = {
-    "a": data['a'].max() + 1 + np.arange(2*2*3).reshape((2,2,3)),
-    "b": data['b'].max() + 1 + np.arange(2*3*4).reshape((2,3,4)),
-    "start": start1,
-}
-b.extend(data2)
-b.sample(2)
-breakpoint()
+    start1 = np.array(
+        [True, False]
+    )
+    data2 = {
+        "a": data['a'].max() + 1 + np.arange(2*2*3).reshape((2,2,3)),
+        "b": data['b'].max() + 1 + np.arange(2*3*4).reshape((2,3,4)),
+        "start": start1,
+    }
+    b.extend(data2)
+    b.sample(2)

@@ -5,25 +5,24 @@ import jax
 import numpy as np
 from jax import random, vmap, nn
 from cpprb import ReplayBuffer
+#from buffer import ReplayBuffer
 
 # import flax
 # from flax import linen as nn
 import equinox as eqx
-from equinox import nn
-import gymnasium
 from modules import greedy_policy
-from modules import hard_update
+from modules import hard_update, soft_update
 from collector import SegmentCollector
-import popgym
 import optax
 import tqdm
 import argparse
 import yaml
 
-from modules import GRUQNetwork, epsilon_greedy_policy, anneal
+from modules import epsilon_greedy_policy, anneal
 from linear_transformer import LTQNetwork
+from gru import GRUQNetwork
 from utils import load_popgym_env
-from losses import segment_dqn_loss
+from losses import segment_dqn_loss, segment_constrained_dqn_loss
 
 model_map = {
     GRUQNetwork.name: GRUQNetwork,
@@ -82,14 +81,16 @@ model_class = model_map[config['model']['name']]
 q_network = model_class(obs_shape, act_shape, config['model'], keys[0])
 q_target = model_class(obs_shape, act_shape, config['model'], keys[0])
 opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
-epochs = tqdm.tqdm(range(1, config['collect']['random_epochs'] + config['collect']['epochs'] + 1))
+epochs = config['collect']['random_epochs'] + config['collect']['epochs']
+pbar = tqdm.tqdm(total=epochs)
 best_eval_reward = best_cumulative_reward = eval_reward = -np.inf
 need_reset = True
 collector = SegmentCollector(env, config)
 eval_collector = SegmentCollector(eval_env, config['eval'])
 transitions_collected = 0
 transitions_trained = 0
-for epoch in epochs:
+for epoch in range(1, epochs + 1):
+    pbar.update()
     key, epoch_key = random.split(key)
     progress = max(0, (epoch - config['collect']['random_epochs']) / config['collect']['epochs'])
     (
@@ -122,6 +123,7 @@ for epoch in epochs:
 
     data = rb.sample(config['train']['batch_size'])
     transitions_trained += data['mask'].sum()
+    #outputs, gradient = segment_dqn_loss(q_network, q_target, data, config['train']['gamma'])
     outputs, gradient = segment_dqn_loss(q_network, q_target, data, config['train']['gamma'])
     loss, (q_mean, target_mean, target_network_mean) = outputs
     updates, opt_state = opt.update(
@@ -129,8 +131,9 @@ for epoch in epochs:
     )
     q_network = eqx.apply_updates(q_network, updates)
 
-    if epoch % config['train']['target_delay'] == 0:
-        q_target = hard_update(q_network, q_target)
+    q_target = soft_update(q_network, q_target, tau=1 / config['train']['target_delay'])
+    #if epoch % config['train']['target_delay'] == 0:
+    #    q_target = hard_update(q_network, q_target)
 
     # Eval
     if epoch % config['eval']['interval'] == 0:
@@ -162,7 +165,7 @@ for epoch in epochs:
     if args.wandb:
         wandb.log(to_log)
 
-    epochs.set_description(
+    pbar.set_description(
         f"eval: {eval_reward:.2f}, {best_eval_reward:.2f} "
         + f"train: {cumulative_reward:.2f}, {best_cumulative_reward:.2f} "
         + f"loss: {loss:.3f} "

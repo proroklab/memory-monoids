@@ -4,8 +4,9 @@ from jax import vmap, jit, random
 import jax
 import numpy as np
 from jax import random, vmap, nn
-from cpprb import ReplayBuffer
-#from buffer import ReplayBuffer
+
+# from cpprb import ReplayBuffer
+from buffer import ReplayBuffer
 
 # import flax
 # from flax import linen as nn
@@ -24,16 +25,13 @@ from gru import GRUQNetwork
 from utils import load_popgym_env
 from losses import segment_dqn_loss, segment_constrained_dqn_loss
 
-model_map = {
-    GRUQNetwork.name: GRUQNetwork,
-    LTQNetwork.name: LTQNetwork
-}
+model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
 a.add_argument("--seed", "-s", type=int, default=None)
 a.add_argument("--device", "-d", type=str, default="cpu")
-a.add_argument("--wandb", '-w', action="store_true")
+a.add_argument("--wandb", "-w", action="store_true")
 args = a.parse_args()
 
 with open(args.config) as f:
@@ -41,11 +39,12 @@ with open(args.config) as f:
 
 if args.seed is not None:
     config["seed"] = args.seed
-config["eval"]["seed"] = config['seed'] + 1000
+config["eval"]["seed"] = config["seed"] + 1000
 config["device"] = args.device
 
 if args.wandb:
     import wandb
+
     wandb.init(project="jax_segment_dqn", config=config)
 
 env = load_popgym_env(config)
@@ -53,46 +52,52 @@ eval_env = load_popgym_env(config, eval=True)
 obs_shape = env.observation_space.shape[0]
 act_shape = env.action_space.n
 
-key = random.PRNGKey(config['seed'])
-eval_key = random.PRNGKey(config['eval']['seed'])
-eval_keys = random.split(eval_key, config['eval']['episodes'])
-opt = optax.adamw(config['train']['lr'])
+key = random.PRNGKey(config["seed"])
+eval_key = random.PRNGKey(config["eval"]["seed"])
+eval_keys = random.split(eval_key, config["eval"]["episodes"])
+opt = optax.adamw(config["train"]["lr"])
 
 
 rb = ReplayBuffer(
-    config['train']['buffer_size'],
+    config["train"]["buffer_size"],
     {
-        "observation": {"shape": (config['collect']['segment_length'], obs_shape), "dtype": jnp.float32},
-        "action": {"shape": config['collect']['segment_length'], "dtype": jnp.int32},
-        "reward": {"shape": config['collect']['segment_length'], "dtype": jnp.float32},
-        "next_observation": {
-            "shape": (config['collect']['segment_length'], obs_shape),
+        "observation": {
+            "shape": (config["collect"]["segment_length"], obs_shape),
             "dtype": jnp.float32,
         },
-        "start": {"shape": config['collect']['segment_length'], "dtype": bool},
-        "done": {"shape": config['collect']['segment_length'], "dtype": bool},
-        "mask": {"shape": config['collect']['segment_length'], "dtype": bool},
+        "action": {"shape": config["collect"]["segment_length"], "dtype": jnp.int32},
+        "reward": {"shape": config["collect"]["segment_length"], "dtype": jnp.float32},
+        "next_observation": {
+            "shape": (config["collect"]["segment_length"], obs_shape),
+            "dtype": jnp.float32,
+        },
+        "start": {"shape": config["collect"]["segment_length"], "dtype": bool},
+        "done": {"shape": config["collect"]["segment_length"], "dtype": bool},
+        "mask": {"shape": config["collect"]["segment_length"], "dtype": bool},
     },
 )
 
 
 key, *keys = random.split(key, 3)
-model_class = model_map[config['model']['name']]
-q_network = model_class(obs_shape, act_shape, config['model'], keys[0])
-q_target = model_class(obs_shape, act_shape, config['model'], keys[0])
+model_class = model_map[config["model"]["name"]]
+q_network = model_class(obs_shape, act_shape, config["model"], keys[0])
+q_target = model_class(obs_shape, act_shape, config["model"], keys[0])
 opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
-epochs = config['collect']['random_epochs'] + config['collect']['epochs']
+epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
 best_eval_reward = best_cumulative_reward = eval_reward = -np.inf
 need_reset = True
 collector = SegmentCollector(env, config)
-eval_collector = SegmentCollector(eval_env, config['eval'])
+eval_collector = SegmentCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
+key, *epoch_keys = random.split(key, epochs + 1)
+key, *sample_keys = random.split(key, epochs + 1)
 for epoch in range(1, epochs + 1):
     pbar.update()
-    key, epoch_key = random.split(key)
-    progress = max(0, (epoch - config['collect']['random_epochs']) / config['collect']['epochs'])
+    progress = max(
+        0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
+    )
     (
         observations,
         actions,
@@ -102,7 +107,7 @@ for epoch in range(1, epochs + 1):
         dones,
         mask,
         cumulative_reward,
-    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_key, False)
+    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch], False)
     if cumulative_reward > best_cumulative_reward:
         best_cumulative_reward = cumulative_reward
 
@@ -118,44 +123,50 @@ for epoch in range(1, epochs + 1):
     rb.on_episode_end()
     transitions_collected += mask.sum()
 
-    if epoch <= config['collect']['random_epochs']:
+    if epoch <= config["collect"]["random_epochs"]:
         continue
 
-    data = rb.sample(config['train']['batch_size'])
-    transitions_trained += data['mask'].sum()
-    #outputs, gradient = segment_dqn_loss(q_network, q_target, data, config['train']['gamma'])
-    outputs, gradient = segment_dqn_loss(q_network, q_target, data, config['train']['gamma'])
+    # data = rb.sample(config['train']['batch_size'])
+    data = rb.sample(config["train"]["batch_size"], sample_keys[epoch])
+    transitions_trained += data["mask"].sum()
+    outputs, gradient = segment_dqn_loss(
+        q_network, q_target, data, config["train"]["gamma"]
+    )
     loss, (q_mean, target_mean, target_network_mean) = outputs
     updates, opt_state = opt.update(
         gradient, opt_state, params=eqx.partition(q_network, eqx.is_inexact_array)[0]
     )
     q_network = eqx.apply_updates(q_network, updates)
-
-    q_target = soft_update(q_network, q_target, tau=1 / config['train']['target_delay'])
-    #if epoch % config['train']['target_delay'] == 0:
+    q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
+    # if epoch % config['train']['target_delay'] == 0:
     #    q_target = hard_update(q_network, q_target)
 
     # Eval
-    if epoch % config['eval']['interval'] == 0:
+    if epoch % config["eval"]["interval"] == 0:
         eval_rewards = 0
-        for e in range(config['eval']['episodes']):
-            *_, _eval_reward = eval_collector(q_network, greedy_policy, 1.0, eval_keys[e], True)
+        for e in range(config["eval"]["episodes"]):
+            *_, _eval_reward = eval_collector(
+                q_network, greedy_policy, 1.0, eval_keys[e], True
+            )
             eval_rewards += _eval_reward
-        eval_reward = eval_rewards / config['eval']['episodes']
+        eval_reward = eval_rewards / config["eval"]["episodes"]
         if eval_reward > best_eval_reward:
             best_eval_reward = eval_reward
 
     to_log = {
         "collect/epoch": epoch,
-        "collect/train_epoch": max(0, epoch - config['collect']['random_epochs']),
+        "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),
         "collect/reward": cumulative_reward,
         "collect/best_reward": best_cumulative_reward,
-        "collect/buffer_capacity": rb.get_stored_size() / config['train']['buffer_size'],
+        "collect/buffer_capacity": rb.get_stored_size()
+        / config["train"]["buffer_size"],
         "collect/transitions": transitions_collected,
         "eval/collect/reward": eval_reward,
         "eval/collect/best_reward": best_eval_reward,
         "train/loss": loss,
-        "train/epsilon": anneal(config['collect']['eps_start'], config['collect']['eps_end'], progress),
+        "train/epsilon": anneal(
+            config["collect"]["eps_start"], config["collect"]["eps_end"], progress
+        ),
         "train/q_mean": q_mean,
         "train/target_mean": target_mean,
         "train/target_network_mean": target_network_mean,

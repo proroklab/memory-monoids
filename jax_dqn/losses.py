@@ -87,16 +87,14 @@ def stream_dqn_loss(q_network, q_target, stream, gamma):
 
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
-def dqn_loss_1d(q_network, q_target, segment):
+def dqn_loss_1d(q_network, q_target, segment, gamma):
     T = segment["reward"].shape[0]
     initial_state = q_network.initial_state()
     q_values, _ = q_network(segment["observation"], initial_state)
     time_index = jnp.arange(T)
     selected_q = q_values[time_index, segment["action"]]
     next_q, _ = q_target(segment["next_observation"], initial_state)
-    target = segment["reward"] + (1.0 - segment["done"]) * config["train"][
-        "gamma"
-    ] * next_q.max(-1)
+    target = segment["reward"] + (1.0 - segment["done"]) * gamma * next_q.max(-1)
     error = selected_q - jax.lax.stop_gradient(target)
     # Cannot jit the loss due to masking
     # loss = jnp.abs(error[segment["mask"]])

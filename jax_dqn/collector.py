@@ -38,6 +38,17 @@ class SegmentCollector:
         self.sampled_frames = 0
         self.sampled_epochs = 0
         self.episode_reward = 0
+        self.best_reward = -np.inf
+
+    def get_episodic_reward(self):
+        if self.done:
+            return self.episode_reward
+        else:
+            return -np.inf
+
+    def update_best_reward(self):
+        if self.get_episodic_reward() > self.best_reward:
+            self.best_reward = self.get_episodic_reward()
 
     def __call__(self, q_network, policy, progress, key, need_reset=False):
         observations = np.zeros(
@@ -50,18 +61,20 @@ class SegmentCollector:
         )
         dones = np.zeros((self.config["segment_length"]), dtype=bool)
         starts = np.zeros((self.config["segment_length"]), dtype=bool)
+        # Prev dones is what the inference policy sees
+        # these are equivalent to starts
+        # prev_dones = np.zeros((self.config["segment_length"]), dtype=bool)
         mask = np.ones((self.config["segment_length"]), dtype=bool)
 
         if self.done or need_reset:
+            self.episode_reward = 0
             key, reset_key = random.split(key)
-            self.done = False
+            self.done = self.next_done = False
             self.observation, self.start, _ = self.env.reset(
                 seed=random.bits(reset_key).item()
             )
             self.recurrent_state = q_network.initial_state()
-            self.episode_reward = 0
 
-        episode_reward = -np.inf
         action_keys = random.split(key, self.config["segment_length"])
         for step in range(self.config["segment_length"]):
             if self.sampled_epochs < self.config["random_epochs"]:
@@ -88,21 +101,20 @@ class SegmentCollector:
                 _,
             ) = self.env.step(self.action)
             self.done = terminated or truncated
+
             observations[step] = self.observation
-            dones[step] = self.done
             actions[step] = self.action
             rewards[step] = self.reward
             next_observations[step] = self.next_observation
-            dones[step] = self.done
             starts[step] = self.start
             self.observation = self.next_observation
             self.start = self.next_start
 
-            self.episode_reward += self.reward
+            if self.sampled_epochs > self.config["random_epochs"]:
+                self.episode_reward += self.reward
             if self.done:
                 mask[step + 1 :] = False
-                episode_reward = self.episode_reward
-                self.episode_reward = 0
+                dones[step] = True
                 break
 
         if not self.config["propagate_state"]:
@@ -110,6 +122,7 @@ class SegmentCollector:
 
         self.sampled_frames += step + 1
         self.sampled_epochs += 1
+        self.update_best_reward()
         return (
             observations,
             actions,
@@ -118,5 +131,96 @@ class SegmentCollector:
             starts,
             dones,
             mask,
-            episode_reward,
+            self.get_episodic_reward(),
+            self.best_reward
+        )
+
+
+class StreamCollector(SegmentCollector):
+    def __call__(self, q_network, policy, progress, key, need_reset=False):
+        observations = []
+        actions = []
+        rewards = []
+        next_observations = []
+        dones = []
+        starts = []
+        # Prev dones is what the inference policy sees
+        # these are equivalent to starts
+        # prev_dones = np.zeros((self.config["segment_length"]), dtype=bool)
+
+        if self.done or need_reset:
+            self.episode_reward = 0
+            key, reset_key = random.split(key)
+            self.done = self.next_done = False
+            self.observation, self.start, _ = self.env.reset(
+                seed=random.bits(reset_key).item()
+            )
+            self.recurrent_state = q_network.initial_state()
+
+        action_keys = random.split(key, self.config["segment_length"])
+        for step in range(self.config["segment_length"]):
+            if self.sampled_epochs < self.config["random_epochs"]:
+                self.action = self.env.action_space.sample()
+            else:
+                self.action, self.recurrent_state = policy(
+                    q_network=q_network,
+                    x=self.observation,
+                    state=self.recurrent_state,
+                    start=self.start,
+                    done=self.done,
+                    progress=progress,
+                    epsilon_start=self.config["eps_start"],
+                    epsilon_end=self.config["eps_end"],
+                    key=action_keys[step],
+                )
+                self.action = self.action.item()
+            (
+                self.next_observation,
+                self.reward,
+                terminated,
+                truncated,
+                self.next_start,
+                _,
+            ) = self.env.step(self.action)
+            self.done = terminated or truncated
+
+            observations.append(self.observation)
+            actions.append(self.action)
+            rewards.append(self.reward)
+            next_observations.append(self.next_observation)
+            starts.append(self.start)
+            dones.append(self.done)
+
+            self.observation = self.next_observation
+            self.start = self.next_start
+
+            if self.sampled_epochs > self.config["random_epochs"]:
+                self.episode_reward += self.reward
+            if self.done:
+                break
+
+        if not self.config["propagate_state"]:
+            self.recurrent_state = q_network.initial_state()
+
+        observations = np.array(observations)
+        actions = np.array(actions)
+        rewards = np.array(rewards)
+        next_observations = np.array(next_observations)
+        starts = np.array(starts)
+        dones = np.array(dones)
+        mask = np.ones_like(dones)
+
+        self.sampled_frames += step + 1
+        self.sampled_epochs += 1
+        self.update_best_reward()
+        return (
+            observations,
+            actions,
+            rewards,
+            next_observations,
+            starts,
+            dones,
+            mask,
+            self.get_episodic_reward(),
+            self.best_reward
         )

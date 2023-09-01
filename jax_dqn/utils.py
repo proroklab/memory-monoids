@@ -10,10 +10,13 @@ import gymnasium as gym
 import jax
 
 
-def load_popgym_env(config, eval=False):
-    module, cls = config["collect"]["env"].rsplit(".", 1)
-    mod = importlib.import_module(module)
-    instance = getattr(mod, cls)()
+def load_popgym_env(config, eval=False, popgym=True):
+    if popgym:
+        module, cls = config["collect"]["env"].rsplit(".", 1)
+        mod = importlib.import_module(module)
+        instance = getattr(mod, cls)()
+    else:
+        instance = gym.make(config["collect"]["env"])
     instance = Flatten(Antialias(PreviousAction(instance)))
     if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
         instance = DiscreteAction(instance)

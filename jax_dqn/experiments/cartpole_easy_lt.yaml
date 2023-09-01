@@ -1,0 +1,35 @@
+seed: 0
+
+collect:
+  env: "popgym.envs.PositionOnlyCartPoleEasy"
+  popgym_env: True
+  segment_length: 20
+  epochs: 10_000
+  random_epochs: 1_000
+  eps_start: 0.3
+  eps_end: 0.01
+  propagate_state: False
+
+train:
+  batch_size: 128
+  buffer_size: 11_000 # In segments
+  gamma: 0.99
+  target_delay: 100 # In epochs/updates
+  lr: 0.0002
+
+model:
+  name: "LT"
+  mlp_size: 64
+  recurrent_size: 64
+
+eval:
+  interval: 50
+  episodes: 5
+  collect:
+    env: "popgym.envs.PositionOnlyCartPoleEasy"
+    popgym_env: True
+    segment_length: 200
+    random_epochs: 0
+    eps_start: 0.0
+    eps_end: 0.00
+    propagate_state: False

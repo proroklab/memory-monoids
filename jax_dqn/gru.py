@@ -46,9 +46,10 @@ class GRUQNetwork(eqx.Module):
     def __call__(self, x, state, start, done):
         x = vmap(self.pre)(x)
 
+        # We need to use start because done is shifted by one during training
         def scan_fn(state, input):
             x, start, done = input
-            state = self.memory(x, state)
+            state = self.memory(x, state * jnp.logical_not(start))
             return state, state
 
         final_state, state = jax.lax.scan(scan_fn, state, (x, start, done))

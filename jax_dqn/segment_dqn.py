@@ -23,7 +23,7 @@ from modules import epsilon_greedy_policy, anneal
 from linear_transformer import LTQNetwork
 from gru import GRUQNetwork
 from utils import load_popgym_env
-from losses import segment_dqn_loss, segment_constrained_dqn_loss
+from losses import segment_dqn_loss, segment_constrained_dqn_loss, segment_ddqn_loss
 
 model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork}
 
@@ -55,7 +55,14 @@ act_shape = env.action_space.n
 key = random.PRNGKey(config["seed"])
 eval_key = random.PRNGKey(config["eval"]["seed"])
 eval_keys = random.split(eval_key, config["eval"]["episodes"])
-opt = optax.adamw(config["train"]["lr"])
+lr_schedule = optax.warmup_cosine_decay_schedule(
+    init_value=config["train"]["lr_warmup"], 
+    peak_value=config["train"]["lr_start"], 
+    warmup_steps=0.1 * config['collect']['epochs'], 
+    decay_steps=config['collect']['epochs'],
+    end_value=config["train"]["lr_end"] 
+)
+opt = optax.adamw(lr_schedule, weight_decay=0.001)
 
 
 rb = ReplayBuffer(
@@ -85,14 +92,14 @@ q_target = model_class(obs_shape, act_shape, config["model"], keys[0])
 opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
 epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
-best_eval_reward = best_cumulative_reward = eval_reward = -np.inf
+best_eval_ep_reward = best_ep_reward = eval_ep_reward = ep_reward = -np.inf
 need_reset = True
 collector = SegmentCollector(env, config)
 eval_collector = SegmentCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
-key, *epoch_keys = random.split(key, epochs + 1)
-key, *sample_keys = random.split(key, epochs + 1)
+key, *epoch_keys = random.split(key, epochs + 2)
+key, *sample_keys = random.split(key, epochs + 2)
 for epoch in range(1, epochs + 1):
     pbar.update()
     progress = max(
@@ -107,9 +114,8 @@ for epoch in range(1, epochs + 1):
         dones,
         mask,
         cumulative_reward,
+        best_ep_reward
     ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch], False)
-    if cumulative_reward > best_cumulative_reward:
-        best_cumulative_reward = cumulative_reward
 
     rb.add(
         observation=observations,
@@ -138,31 +144,29 @@ for epoch in range(1, epochs + 1):
     )
     q_network = eqx.apply_updates(q_network, updates)
     q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
-    # if epoch % config['train']['target_delay'] == 0:
-    #    q_target = hard_update(q_network, q_target)
 
     # Eval
     if epoch % config["eval"]["interval"] == 0:
         eval_rewards = 0
         for e in range(config["eval"]["episodes"]):
-            *_, _eval_reward = eval_collector(
+            _ = eval_collector(
                 q_network, greedy_policy, 1.0, eval_keys[e], True
             )
-            eval_rewards += _eval_reward
-        eval_reward = eval_rewards / config["eval"]["episodes"]
-        if eval_reward > best_eval_reward:
-            best_eval_reward = eval_reward
+            eval_rewards += eval_collector.get_episodic_reward()
+        eval_ep_reward = eval_rewards / config["eval"]["episodes"]
+        if eval_ep_reward > best_eval_ep_reward:
+            best_eval_ep_reward = eval_ep_reward
 
     to_log = {
         "collect/epoch": epoch,
         "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),
         "collect/reward": cumulative_reward,
-        "collect/best_reward": best_cumulative_reward,
+        "collect/best_reward": best_ep_reward,
         "collect/buffer_capacity": rb.get_stored_size()
         / config["train"]["buffer_size"],
         "collect/transitions": transitions_collected,
-        "eval/collect/reward": eval_reward,
-        "eval/collect/best_reward": best_eval_reward,
+        "eval/collect/reward": eval_ep_reward,
+        "eval/collect/best_reward": best_eval_ep_reward,
         "train/loss": loss,
         "train/epsilon": anneal(
             config["collect"]["eps_start"], config["collect"]["eps_end"], progress
@@ -171,14 +175,15 @@ for epoch in range(1, epochs + 1):
         "train/target_mean": target_mean,
         "train/target_network_mean": target_network_mean,
         "train/transitions": transitions_trained,
+        "train/grad_global_norm": optax.global_norm(gradient),
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:
         wandb.log(to_log)
 
     pbar.set_description(
-        f"eval: {eval_reward:.2f}, {best_eval_reward:.2f} "
-        + f"train: {cumulative_reward:.2f}, {best_cumulative_reward:.2f} "
+        f"eval: {eval_ep_reward:.2f}, {best_eval_ep_reward:.2f} "
+        + f"train: {cumulative_reward:.2f}, {best_ep_reward:.2f} "
         + f"loss: {loss:.3f} "
         + f"eps: {anneal(config['collect']['eps_start'], config['collect']['eps_end'], progress):.2f} "
         + f"buf: {rb.get_stored_size() / config['train']['buffer_size']:.2f} "

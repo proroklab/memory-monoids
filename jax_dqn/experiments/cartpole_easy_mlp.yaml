@@ -1,0 +1,40 @@
+seed: 0
+
+collect:
+  env: "CartPole-v0" #"popgym.envs.PositionOnlyCartPoleEasy"
+  popgym_env: True
+  segment_length: 1
+  epochs: 1000
+  random_epochs: 1000
+  eps_start: 0.0
+  eps_end: 0.0
+  propagate_state: False
+
+train:
+  batch_size: 256
+  buffer_size: 2000 # In segments
+  gamma: 0.99
+  target_delay: 50 # In epochs/updates
+  warmup_epochs: 200
+  lr_warmup: 0.0002
+  lr_start: 0.001
+  lr_end: 0.0001
+  #lr: 0.0001
+
+model:
+  name: "MLP"
+  mlp_size: 64
+  recurrent_size: 64
+  noise_std: 0.02
+
+eval:
+  interval: 5
+  episodes: 5
+  collect:
+    env: "popgym.envs.PositionOnlyCartPoleEasy"
+    popgym_env: True
+    segment_length: 200
+    random_epochs: 0
+    eps_start: 0.0
+    eps_end: 0.00
+    propagate_state: False

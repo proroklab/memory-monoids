@@ -11,6 +11,7 @@ from buffer import ReplayBuffer
 # import flax
 # from flax import linen as nn
 import equinox as eqx
+from modules import mean_noise
 from modules import greedy_policy
 from modules import hard_update, soft_update
 from collector import SegmentCollector
@@ -25,6 +26,7 @@ from linear_transformer import LTQNetwork
 from gru import GRUQNetwork
 from utils import load_popgym_env
 from losses import segment_dqn_loss, segment_constrained_dqn_loss, segment_ddqn_loss
+import guppy
 
 model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork}
 
@@ -138,6 +140,8 @@ for epoch in range(1, epochs + 1):
         _, eval_ep_reward, best_eval_ep_reward = eval_collector(
             q_network, greedy_policy, 1.0, eval_key, True
         )
+        # h = guppy.hpy()
+        # breakpoint()
 
     to_log = {
         "collect/epoch": epoch,
@@ -159,6 +163,7 @@ for epoch in range(1, epochs + 1):
         "train/target_network_mean": target_network_mean,
         "train/transitions": transitions_trained,
         "train/grad_global_norm": optax.global_norm(gradient),
+        "train/mean_noise": mean_noise(q_network),
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:

@@ -41,10 +41,14 @@ class MLPQNetwork(eqx.Module):
 
     @eqx.filter_jit
     def __call__(self, x, state, start, done, key):
-        key, pre_key, post_key = random.split(
-            key,
-            (3, math.prod(x.shape[:-1]))
-        )
+        # key, pre_key, post_key = random.split(
+        #     key,
+        #     (3, math.prod(x.shape[:-1]))
+        # )
+        # TODO: key should be the same for the whole batch
+        _, pre_key, post_key = random.split(key, 3)
+        pre_key = jnp.tile(jnp.expand_dims(pre_key, 0), (x.shape[0], 1))
+        post_key = jnp.tile(jnp.expand_dims(post_key, 0), (x.shape[0], 1))
         x = vmap(self.pre)(x, key=pre_key)
         y = vmap(self.post)(x, key=post_key)
         return y, jnp.zeros(1)

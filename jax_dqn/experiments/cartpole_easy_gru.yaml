@@ -7,15 +7,15 @@ collect:
   steps_per_epoch: 40
   epochs: 5_000
   random_epochs: 1_000
-  eps_start: 0.3
-  eps_end: 0.01
+  eps_start: 0.0
+  eps_end: 0.0
   propagate_state: True
 
 train:
   batch_size: 128
-  buffer_size: 6_000 # In segments
+  buffer_size: 20_000 # In segments
   gamma: 0.99
-  target_delay: 30 # In epochs/updates
+  target_delay: 50 # In epochs/updates
   warmup_epochs: 1_000
   lr_warmup: 0.0002
   lr_start: 0.0005
@@ -26,6 +26,7 @@ model:
   name: "GRU"
   mlp_size: 64
   recurrent_size: 64
+  noise_std: 0.017
 
 eval:
   interval: 10

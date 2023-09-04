@@ -15,6 +15,7 @@ class ReplayBuffer:
         self.ptr = 0
         self.size = 0
         self.max_size = buffer_size
+        self.padding_size = 0
         for k, v in schema.items():
             shape = v["shape"]
             if isinstance(shape, int):
@@ -36,7 +37,7 @@ class ReplayBuffer:
         self, data: Dict[str, np.ndarray]
     ) -> Tuple[Dict[str, np.ndarray], int]:
         for k in data:
-            assert k in self.data
+            assert k in self.data, f"Key {k} not in schema"
             # Allow the user to omit the batch dim (pass a single transition)
             if data[k].ndim == self.data[k].ndim - 1:
                 data[k] = np.expand_dims(data[k], 0)
@@ -50,6 +51,9 @@ class ReplayBuffer:
         return data, batch_size
 
     def add(self, **data) -> None:
+        if 'mask' in data:
+            self.padding_size += data['mask'].sum()
+            self.density = (self.size - self.padding_size) / self.size
         data, batch_size = self.validate_inputs(data)
         idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
         self.ptr = (self.ptr + batch_size) % self.max_size
@@ -66,6 +70,9 @@ class ReplayBuffer:
 
     def get_stored_size(self):
         return self.size
+
+    def get_density(self):
+        return self.density if hasattr(self, 'density') else -1.0
 
 
 class TapeBuffer(ReplayBuffer):

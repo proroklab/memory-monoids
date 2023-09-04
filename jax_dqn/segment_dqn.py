@@ -14,6 +14,7 @@ import equinox as eqx
 from modules import greedy_policy
 from modules import hard_update, soft_update
 from collector import SegmentCollector
+from collector2 import BatchedSegmentCollector
 import optax
 import tqdm
 import argparse
@@ -54,7 +55,6 @@ act_shape = env.action_space.n
 
 key = random.PRNGKey(config["seed"])
 eval_key = random.PRNGKey(config["eval"]["seed"])
-eval_keys = random.split(eval_key, config["eval"]["episodes"])
 lr_schedule = optax.warmup_cosine_decay_schedule(
     init_value=config["train"]["lr_warmup"], 
     peak_value=config["train"]["lr_start"], 
@@ -70,17 +70,18 @@ rb = ReplayBuffer(
     {
         "observation": {
             "shape": (config["collect"]["segment_length"], obs_shape),
-            "dtype": jnp.float32,
+            "dtype": np.float32,
         },
-        "action": {"shape": config["collect"]["segment_length"], "dtype": jnp.int32},
-        "reward": {"shape": config["collect"]["segment_length"], "dtype": jnp.float32},
+        "action": {"shape": config["collect"]["segment_length"], "dtype": np.int32},
+        "reward": {"shape": config["collect"]["segment_length"], "dtype": np.float32},
         "next_observation": {
             "shape": (config["collect"]["segment_length"], obs_shape),
-            "dtype": jnp.float32,
+            "dtype": np.float32,
         },
         "start": {"shape": config["collect"]["segment_length"], "dtype": bool},
         "done": {"shape": config["collect"]["segment_length"], "dtype": bool},
         "mask": {"shape": config["collect"]["segment_length"], "dtype": bool},
+        "episode_id": {"shape": config["collect"]["segment_length"], "dtype": np.int64},
     },
 )
 
@@ -94,49 +95,36 @@ epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
 best_eval_ep_reward = best_ep_reward = eval_ep_reward = ep_reward = -np.inf
 need_reset = True
-collector = SegmentCollector(env, config)
-eval_collector = SegmentCollector(eval_env, config["eval"])
+collector = BatchedSegmentCollector(env, config)
+eval_collector = BatchedSegmentCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
-key, *epoch_keys = random.split(key, epochs + 2)
-key, *sample_keys = random.split(key, epochs + 2)
+key, *epoch_keys = random.split(key, epochs + 1)
+key, *sample_keys = random.split(key, epochs + 1)
+key, *loss_keys = random.split(key, epochs + 1)
 for epoch in range(1, epochs + 1):
     pbar.update()
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
     )
     (
-        observations,
-        actions,
-        rewards,
-        next_observations,
-        starts,
-        dones,
-        mask,
+        transitions,
         cumulative_reward,
         best_ep_reward
-    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch], False)
+    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch - 1], False)
 
-    rb.add(
-        observation=observations,
-        action=actions,
-        reward=rewards,
-        next_observation=next_observations,
-        start=starts,
-        done=dones,
-        mask=mask,
-    )
+    rb.add(**transitions)
     rb.on_episode_end()
-    transitions_collected += mask.sum()
+    transitions_collected += transitions['mask'].sum()
 
     if epoch <= config["collect"]["random_epochs"]:
         continue
 
     # data = rb.sample(config['train']['batch_size'])
-    data = rb.sample(config["train"]["batch_size"], sample_keys[epoch])
+    data = rb.sample(config["train"]["batch_size"], sample_keys[epoch - 1])
     transitions_trained += data["mask"].sum()
     outputs, gradient = segment_dqn_loss(
-        q_network, q_target, data, config["train"]["gamma"]
+        q_network, q_target, data, config["train"]["gamma"], loss_keys[epoch - 1]
     )
     loss, (q_mean, target_mean, target_network_mean) = outputs
     updates, opt_state = opt.update(
@@ -147,15 +135,9 @@ for epoch in range(1, epochs + 1):
 
     # Eval
     if epoch % config["eval"]["interval"] == 0:
-        eval_rewards = 0
-        for e in range(config["eval"]["episodes"]):
-            _ = eval_collector(
-                q_network, greedy_policy, 1.0, eval_keys[e], True
-            )
-            eval_rewards += eval_collector.get_episodic_reward()
-        eval_ep_reward = eval_rewards / config["eval"]["episodes"]
-        if eval_ep_reward > best_eval_ep_reward:
-            best_eval_ep_reward = eval_ep_reward
+        _, eval_ep_reward, best_eval_ep_reward = eval_collector(
+            q_network, greedy_policy, 1.0, eval_key, True
+        )
 
     to_log = {
         "collect/epoch": epoch,
@@ -164,6 +146,7 @@ for epoch in range(1, epochs + 1):
         "collect/best_reward": best_ep_reward,
         "collect/buffer_capacity": rb.get_stored_size()
         / config["train"]["buffer_size"],
+        "collect/buffer_density": rb.get_density(),
         "collect/transitions": transitions_collected,
         "eval/collect/reward": eval_ep_reward,
         "eval/collect/best_reward": best_eval_ep_reward,

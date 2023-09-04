@@ -39,18 +39,17 @@ def segment_constrained_dqn_loss(q_network, q_target, segment, gamma):
 def segment_dqn_loss(q_network, q_target, segment, gamma, key):
     # Double DQN
     B, T = segment["reward"].shape
-    _, net_key, target_key = jax.random.split(key, (3, B))
     initial_state = q_network.initial_state()
-    q_values, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0))(
-        segment["observation"], initial_state, segment["start"], segment["done"], key=net_key
+    q_values, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
+        segment["observation"], initial_state, segment["start"], segment["done"], key
     )
     batch_index = jnp.repeat(jnp.arange(B), T)
     time_index = jnp.tile(jnp.arange(T), B)
     selected_q = q_values[
         batch_index, time_index, segment["action"].reshape(-1)
     ].reshape(segment["action"].shape)
-    next_q, _ = jax.lax.stop_gradient(eqx.filter_vmap(q_target, in_axes=(0, None, 0, 0))(
-        segment["next_observation"], initial_state, segment["start"], segment["done"], key=target_key
+    next_q, _ = jax.lax.stop_gradient(eqx.filter_vmap(q_target, in_axes=(0, None, 0, 0, None))(
+        segment["next_observation"], initial_state, segment["start"], segment["done"], key
     ))
     target = segment["reward"] + (1.0 - segment["done"]) * gamma * next_q.max(-1)
     error = selected_q - target
@@ -97,7 +96,6 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma):
 @partial(eqx.filter_value_and_grad, has_aux=True)
 def stream_dqn_loss(q_network, q_target, stream, gamma, key):
     B = stream["reward"].shape[0]
-    _, net_key, target_key = jax.random.split(key, (3, B))
     initial_state = q_network.initial_state()
     q_values, _ = q_network(
         stream["observation"], stream["start"], stream["done"], initial_state, key=key

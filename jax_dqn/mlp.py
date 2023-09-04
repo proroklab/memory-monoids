@@ -31,8 +31,8 @@ class MLPQNetwork(eqx.Module):
                 ),
                 mish,
                 #nn.Dropout(p=0.05),
-                nn.LayerNorm(self.config["mlp_size"], use_weight=False, use_bias=False),
-                #FinalLinear(self.config["mlp_size"], self.output_size, key=keys[3]),
+                #NoisyLinear(self.config["mlp_size"], self.config["mlp_size"], key=keys[1]), mish,
+                #nn.LayerNorm(self.config["mlp_size"], use_weight=False, use_bias=False),
                 final_layer_init(NoisyLinear(
                     self.config["mlp_size"], self.output_size, init_std=config['noise_std'], key=keys[3]
                 ))

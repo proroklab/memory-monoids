@@ -43,7 +43,7 @@ class GRUQNetwork(eqx.Module):
         )
 
     @eqx.filter_jit
-    def __call__(self, x, state, start, done):
+    def __call__(self, x, state, start, done, key):
         x = vmap(self.pre)(x)
 
         # We need to use start because done is shifted by one during training

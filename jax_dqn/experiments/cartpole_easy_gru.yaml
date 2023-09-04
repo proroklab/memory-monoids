@@ -4,6 +4,7 @@ collect:
   env: "popgym.envs.PositionOnlyCartPoleEasy"
   popgym_env: True
   segment_length: 40
+  steps_per_epoch: 40
   epochs: 5_000
   random_epochs: 1_000
   eps_start: 0.3
@@ -27,12 +28,12 @@ model:
   recurrent_size: 64
 
 eval:
-  interval: 50
-  episodes: 5
+  interval: 10
   collect:
     env: "popgym.envs.PositionOnlyCartPoleEasy"
     popgym_env: True
     segment_length: 200
+    steps_per_epoch: 1_000
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

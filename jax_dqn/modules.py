@@ -1,3 +1,4 @@
+from functools import partial
 import math
 from typing import Any, Callable, Dict
 import jax
@@ -9,6 +10,13 @@ import jax.numpy as jnp
 @jax.jit
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
+
+def mean_noise(network):
+    leaves = jax.tree_leaves(network, is_leaf=lambda x: isinstance(x, NoisyLinear))
+    nelem = sum(leaf.sigma_weight.size for leaf in leaves if isinstance(leaf, NoisyLinear))
+    sum_ = sum(jnp.sum(leaf.sigma_weight) for leaf in leaves if isinstance(leaf, NoisyLinear))
+    result = sum_ / nelem
+    return result
 
 
 @eqx.filter_jit
@@ -51,6 +59,9 @@ class NoisyLinear(eqx.nn.Linear):
         self.sigma_bias = jnp.ones(self.bias.shape) * init_std 
         self.sigma_weight = jnp.ones(self.weight.shape) * init_std 
         self.inference = inference
+
+    def get_noise(self):
+        return self.sigma_weight
 
     def __call__(self, x, key=None):
         if self.inference:

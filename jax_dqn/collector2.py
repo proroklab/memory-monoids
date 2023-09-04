@@ -59,7 +59,7 @@ class BatchedSegmentCollector:
         for s_id in segments_to_mean:
             reward.append(self.episode_reward.pop(s_id))
         if len(reward) == 0:
-            return np.inf
+            return -np.inf
         return np.mean(reward)
 
     def split_and_pad(self, arrays: Dict[str, np.ndarray], seq_lens):

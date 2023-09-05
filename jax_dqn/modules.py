@@ -7,7 +7,7 @@ from jax import random
 import jax.numpy as jnp
 
 
-@jax.jit
+#@jax.jit
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
 
@@ -82,7 +82,7 @@ class NoisyLinear(eqx.nn.Linear):
         # return lin + bias_noise + weight_noise
 
 
-@jax.jit
+#@jax.jit
 def anneal(epsilon_start, epsilon_end, progress):
     return epsilon_start + (epsilon_end - epsilon_start) * progress
 
@@ -92,28 +92,26 @@ def make_random_policy(env):
         return env.action_space.sample(), state
 
 
-@eqx.filter_jit
+#@eqx.filter_jit
 def greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
-    start = jnp.array([start])
-    done = jnp.array([done])
     q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=key)
     action = jnp.argmax(q_values)
     return action, state
 
 
-@eqx.filter_jit
+#@eqx.filter_jit
 def epsilon_greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
-    _, *keys = random.split(key, 4)
+    _, p_key, r_key, s_key = random.split(key, 4)
     action, state = greedy_policy(
-        q_network, x, state, start, done, key=keys[0], progress=None, epsilon_start=None, epsilon_end=None
+        q_network, x, state, start, done, key=p_key, progress=None, epsilon_start=None, epsilon_end=None
     )
-    random_action = random.randint(keys[1], (), 0, q_network.output_size)
+    random_action = random.randint(r_key, (), 0, q_network.output_size)
     action = jax.lax.cond(
-        random.uniform(keys[2]) < anneal(epsilon_start, epsilon_end, progress),
+        random.uniform(s_key) < anneal(epsilon_start, epsilon_end, progress),
         lambda: random_action,
         lambda: action,
     )

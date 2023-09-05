@@ -53,7 +53,7 @@ class ReplayBuffer:
     def add(self, **data) -> None:
         if 'mask' in data:
             self.padding_size += data['mask'].sum()
-            self.density = (self.size - self.padding_size) / self.size
+            self.density = (self.size - self.padding_size) / max(1, self.size)
         data, batch_size = self.validate_inputs(data)
         idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
         self.ptr = (self.ptr + batch_size) % self.max_size

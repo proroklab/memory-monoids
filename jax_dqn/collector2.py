@@ -101,15 +101,14 @@ class BatchedSegmentCollector:
         episode_id = -1 * np.ones((self.config["steps_per_epoch"]), np.int64)
         mask = np.zeros((self.config["steps_per_epoch"]), dtype=bool)
 
-        key, *reset_keys = random.split(key, self.config["steps_per_epoch"] + 1)
-        key, *action_keys = random.split(key, self.config["steps_per_epoch"] + 1)
         seq_len = 0
         seq_lens = []
 
         if need_reset:
             self.done = self.next_done = False
+            key, reset_key = random.split(key)
             self.observation, self.start, _ = self.env.reset(
-                seed=random.bits(reset_keys[0]).item()
+                seed=random.bits(reset_key).item()
             )
             self.recurrent_state = q_network.initial_state()
             seq_lens.append(seq_len)
@@ -120,8 +119,9 @@ class BatchedSegmentCollector:
         for step in range(self.config["steps_per_epoch"]):
             if self.done:
                 self.done = self.next_done = False
+                key, reset_key = random.split(key)
                 self.observation, self.start, _ = self.env.reset(
-                    seed=random.bits(reset_keys[step]).item()
+                    seed=random.bits(reset_key).item()
                 )
                 self.recurrent_state = q_network.initial_state()
                 seq_lens.append(seq_len)
@@ -134,16 +134,17 @@ class BatchedSegmentCollector:
             if self.sampled_epochs < self.config["random_epochs"]:
                 self.action = self.env.action_space.sample()
             else:
+                key, action_key = random.split(key)
                 self.action, self.recurrent_state = policy(
                     q_network=q_network,
                     x=self.observation,
                     state=self.recurrent_state,
-                    start=self.start,
-                    done=self.done,
+                    start=np.array([self.start]),
+                    done=np.array([self.done]),
                     progress=progress,
                     epsilon_start=self.config["eps_start"],
                     epsilon_end=self.config["eps_end"],
-                    key=action_keys[step],
+                    key=action_key,
                 )
                 self.action = self.action.item()
             (
@@ -215,11 +216,11 @@ class StreamCollector(BatchedSegmentCollector):
             )
             self.recurrent_state = q_network.initial_state()
 
-        action_keys = random.split(key, self.config["segment_length"])
         for step in range(self.config["segment_length"]):
             if self.sampled_epochs < self.config["random_epochs"]:
                 self.action = self.env.action_space.sample()
             else:
+                key, action_key = random.split(key)
                 self.action, self.recurrent_state = policy(
                     q_network=q_network,
                     x=self.observation,
@@ -229,7 +230,7 @@ class StreamCollector(BatchedSegmentCollector):
                     progress=progress,
                     epsilon_start=self.config["eps_start"],
                     epsilon_end=self.config["eps_end"],
-                    key=action_keys[step],
+                    key=action_key,
                 )
                 self.action = self.action.item()
             (

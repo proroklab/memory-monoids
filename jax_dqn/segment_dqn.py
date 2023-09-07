@@ -15,8 +15,7 @@ import equinox as eqx
 from modules import mean_noise
 from modules import greedy_policy
 from modules import hard_update, soft_update
-from collector import SegmentCollector
-from collector2 import BatchedSegmentCollector
+from segment_collector import BatchedSegmentCollector
 import optax
 import tqdm
 import argparse
@@ -113,8 +112,6 @@ for epoch in range(1, epochs + 1):
     rb.add(**transitions)
     rb.on_episode_end()
     transitions_collected += transitions['mask'].sum()
-
-
 
     if epoch <= config["collect"]["random_epochs"]:
         continue

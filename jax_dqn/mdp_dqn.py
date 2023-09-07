@@ -14,7 +14,8 @@ import equinox as eqx
 from losses import stream_dqn_loss, segment_dqn_loss
 from modules import greedy_policy
 from modules import hard_update, soft_update, mean_noise
-from collector import SegmentCollector, StreamCollector
+#from collector import SegmentCollector, StreamCollector
+from tape_collector import TapeCollector
 import optax
 import tqdm
 import argparse
@@ -97,8 +98,8 @@ epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
 best_eval_reward = best_cumulative_reward = eval_reward = -np.inf
 need_reset = True
-collector = StreamCollector(env, config)
-eval_collector = StreamCollector(eval_env, config["eval"])
+collector = TapeCollector(env, config)
+eval_collector = TapeCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
 key, *epoch_keys = random.split(key, epochs + 2)

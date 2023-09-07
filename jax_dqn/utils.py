@@ -20,7 +20,6 @@ def load_popgym_env(config, eval=False, popgym=True):
     instance = Flatten(Antialias(PreviousAction(instance)))
     if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
         instance = DiscreteAction(instance)
-    instance = EpisodeStart(instance)
     instance.action_space.seed(config["seed"] + eval * 1000)
 
     return instance

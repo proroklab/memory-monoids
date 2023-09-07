@@ -107,7 +107,7 @@ class BatchedSegmentCollector:
         if need_reset:
             self.done = self.next_done = False
             key, reset_key = random.split(key)
-            self.observation, self.start, _ = self.env.reset(
+            self.observation, _ = self.env.reset(
                 seed=random.bits(reset_key).item()
             )
             self.recurrent_state = q_network.initial_state()
@@ -120,7 +120,7 @@ class BatchedSegmentCollector:
             if self.done:
                 self.done = self.next_done = False
                 key, reset_key = random.split(key)
-                self.observation, self.start, _ = self.env.reset(
+                self.observation, _ = self.env.reset(
                     seed=random.bits(reset_key).item()
                 )
                 self.recurrent_state = q_network.initial_state()
@@ -152,7 +152,6 @@ class BatchedSegmentCollector:
                 self.reward,
                 terminated,
                 truncated,
-                _, #self.next_start,
                 _,
             ) = self.env.step(self.action)
             self.done = terminated or truncated

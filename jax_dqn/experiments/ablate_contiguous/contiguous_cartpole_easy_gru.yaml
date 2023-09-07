@@ -5,7 +5,7 @@ collect:
   popgym_env: True
   segment_length: 40
   steps_per_epoch: 40
-  epochs: 5_000
+  epochs: 6_000
   random_epochs: 2_000
   eps_start: 0.1
   eps_end: 0.01

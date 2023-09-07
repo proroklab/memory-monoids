@@ -7,7 +7,7 @@ from jax import random
 import jax.numpy as jnp
 
 
-#@jax.jit
+@jax.jit
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
 
@@ -30,23 +30,18 @@ class Lambda(eqx.Module):
         return self.f(x)
 
 
-class FinalLinear(eqx.Module):
-    weight: jax.Array
-    bias: jax.Array
-
-    def __init__(self, input_size, output_size, key):
-        self.weight = random.normal(key, (output_size, input_size)) * 0.001
-        self.bias = jnp.zeros(output_size)
-
-    def __call__(self, x, key=None):
-        return self.weight @ x + self.bias
-
-def final_layer_init(linear, scale=0.01):
-    linear = eqx.tree_at(lambda l: l.weight, linear, linear.weight * scale) 
-    linear = eqx.tree_at(lambda l: l.bias, linear, linear.bias * 0.0)
+def ortho_init(key, linear, scale):
+    init = jax.nn.initializers.orthogonal(scale=scale)
+    linear = eqx.tree_at(lambda l: l.weight, linear, init(key, linear.weight.shape))
     return linear
 
+def ortho_linear(key, input_size, output_size, scale=1.0):
+    return ortho_init(key, eqx.nn.Linear(input_size, output_size, key=key), scale=scale)
 
+def final_linear(key, input_size, output_size, scale=0.01):
+    linear = ortho_linear(key, input_size, output_size, scale=scale)
+    linear = eqx.tree_at(lambda l: l.bias, linear, linear.bias * 0.0)
+    return linear
 
 
 class NoisyLinear(eqx.nn.Linear):
@@ -92,7 +87,7 @@ def make_random_policy(env):
         return env.action_space.sample(), state
 
 
-#@eqx.filter_jit
+@eqx.filter_jit
 def greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
@@ -100,8 +95,17 @@ def greedy_policy(
     action = jnp.argmax(q_values)
     return action, state
 
+@eqx.filter_jit
+def boltzmann_policy(
+    q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
+):
+    _, q_key, s_key  = random.split(key, 3)
+    temp = anneal(epsilon_start, epsilon_end, progress)
+    q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=q_key)
+    action = jax.random.categorical(s_key, q_values / temp, axis=-1).squeeze(-1)
+    return action, state
 
-#@eqx.filter_jit
+@eqx.filter_jit
 def epsilon_greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
@@ -110,10 +114,11 @@ def epsilon_greedy_policy(
         q_network, x, state, start, done, key=p_key, progress=None, epsilon_start=None, epsilon_end=None
     )
     random_action = random.randint(r_key, (), 0, q_network.output_size)
-    action = jax.lax.cond(
-        random.uniform(s_key) < anneal(epsilon_start, epsilon_end, progress),
-        lambda: random_action,
-        lambda: action,
+    do_random = random.uniform(s_key) < anneal(epsilon_start, epsilon_end, progress)
+    action = jax.lax.select(
+        do_random,
+        random_action,
+        action,
     )
     return action, state
 

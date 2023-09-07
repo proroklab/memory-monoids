@@ -62,11 +62,7 @@ lr_schedule = optax.cosine_decay_schedule(
     init_value=config["train"]["lr"], 
     decay_steps=config['collect']['epochs'],
 )
-#opt = optax.adamw(lr_schedule, weight_decay=0.001)
-opt = optax.chain(
-    optax.clip_by_global_norm(config["train"]["grad_clip"]),
-    optax.adamw(lr_schedule, weight_decay=0.001)
-)
+opt = optax.adamw(lr_schedule, weight_decay=0.001)
 
 
 rb = ReplayBuffer(
@@ -84,7 +80,6 @@ rb = ReplayBuffer(
         },
         "start": {"shape": (), "dtype": bool},
         "done": {"shape": (), "dtype": bool},
-        "mask": {"shape": (), "dtype": bool},
     },
 )
 
@@ -96,73 +91,58 @@ q_target = model_class(obs_shape, act_shape, config["model"], keys[0])
 opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
 epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
-best_eval_reward = best_cumulative_reward = eval_reward = -np.inf
+best_eval_ep_reward = best_cumulative_reward = eval_ep_reward = -np.inf
 need_reset = True
 collector = TapeCollector(env, config)
 eval_collector = TapeCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
-key, *epoch_keys = random.split(key, epochs + 2)
-key, *sample_keys = random.split(key, epochs + 2)
-key, *loss_keys = random.split(key, epochs + 2)
+
+epoch_keys = random.split(key, epochs + 1)
+key, epoch_keys = epoch_keys[0], epoch_keys[1:]
+collect_keys = random.split(key, epochs + 1)
+key, collect_keys = collect_keys[0], collect_keys[1:]
+loss_keys = random.split(key, epochs + 1)
+key, loss_keys = loss_keys[0], loss_keys[1:]
+
 for epoch in range(1, epochs + 1):
     pbar.update()
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
     )
     (
-        observations,
-        actions,
-        rewards,
-        next_observations,
-        starts,
-        dones,
-        mask,
+        transitions,
         cumulative_reward,
         best_cumulative_reward
-    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch], False)
+    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch-1], False)
 
     # Remove zeros as segment collector will pad
     rb.add(
-        observation=observations[mask],
-        action=actions[mask],
-        reward=rewards[mask],
-        next_observation=next_observations[mask],
-        start=starts[mask],
-        done=dones[mask],
-        mask=mask[mask],
+        **transitions
     )
     rb.on_episode_end()
-    transitions_collected += mask.sum()
+    transitions_collected += len(transitions['done'])
 
     if epoch <= config["collect"]["random_epochs"]:
         continue
 
-    data = rb.sample(config["train"]["batch_size"], sample_keys[epoch])
-    transitions_trained += data["mask"].sum()
+    data = rb.sample(config["train"]["batch_size"], collect_keys[epoch-1])
+    transitions_trained += len(data["done"])
     outputs, gradient = stream_dqn_loss(
-        q_network, q_target, data, config["train"]["gamma"], key=loss_keys[epoch]
+        q_network, q_target, data, config["train"]["gamma"], key=loss_keys[epoch-1]
     )
     loss, (q_mean, target_mean, target_network_mean) = outputs
     updates, opt_state = opt.update(
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    #if epoch % config['train']['target_delay'] == 0:
-    #    q_target = hard_update(q_network, q_target)
     q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
     # Eval
     if epoch % config["eval"]["interval"] == 0:
-        eval_rewards = 0
-        for e in range(config["eval"]["episodes"]):
-            _ = eval_collector(
-                q_network, greedy_policy, 1.0, eval_keys[e], True
-            )
-            eval_rewards += eval_collector.get_episodic_reward()
-        eval_reward = eval_rewards / config["eval"]["episodes"]
-        if eval_reward > best_eval_reward:
-            best_eval_reward = eval_reward
+        _, eval_ep_reward, best_eval_ep_reward = eval_collector(
+            q_network, greedy_policy, 1.0, eval_key, True
+        )
 
     to_log = {
         "collect/epoch": epoch,
@@ -172,8 +152,8 @@ for epoch in range(1, epochs + 1):
         "collect/buffer_capacity": rb.get_stored_size()
         / config["train"]["buffer_size"],
         "collect/transitions": transitions_collected,
-        "eval/collect/reward": eval_reward,
-        "eval/collect/best_reward": best_eval_reward,
+        "eval/collect/reward": eval_ep_reward,
+        "eval/collect/best_reward": best_eval_ep_reward,
         "train/loss": loss,
         "train/epsilon": anneal(
             config["collect"]["eps_start"], config["collect"]["eps_end"], progress
@@ -183,14 +163,13 @@ for epoch in range(1, epochs + 1):
         "train/target_network_mean": target_network_mean,
         "train/transitions": transitions_trained,
         "train/grad_unclipped_global_norm": optax.global_norm(gradient),
-        "train/mean_noise": mean_noise(q_network),
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:
         wandb.log(to_log)
 
     pbar.set_description(
-        f"eval: {eval_reward:.2f}, {best_eval_reward:.2f} "
+        f"eval: {eval_ep_reward:.2f}, {best_eval_ep_reward:.2f} "
         + f"train: {cumulative_reward:.2f}, {best_cumulative_reward:.2f} "
         + f"loss: {loss:.3f} "
         + f"eps: {anneal(config['collect']['eps_start'], config['collect']['eps_end'], progress):.2f} "

@@ -1,10 +1,10 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 import jax
 import equinox as eqx
 from equinox import nn
 from jax import random, vmap
 import jax.numpy as jnp
-from modules import mish, FinalLinear, final_layer_init, NoisyLinear
+from modules import mish, ortho_linear, final_linear
 
 
 class StochasticSequential(nn.Sequential):
@@ -19,48 +19,57 @@ class GRUQNetwork(eqx.Module):
     pre: eqx.Module
     memory: eqx.Module
     post: eqx.Module
+    value: eqx.Module
+    advantage: eqx.Module
     name: str = "GRU"
 
     def __init__(self, obs_shape, act_shape, config, key):
         self.config = config
         self.input_size = obs_shape
         self.output_size = act_shape
-        keys = random.split(key, 5)
+        keys = random.split(key, 7)
         pre = nn.Sequential(
-            [nn.Linear(obs_shape, config["mlp_size"], key=keys[0]), mish]
+            [ortho_linear(keys[1], obs_shape, config["mlp_size"]), mish]
         )
         self.pre = eqx.filter_vmap(pre)
         self.memory = nn.GRUCell(
-            config["mlp_size"], self.config["recurrent_size"], key=keys[1]
+            config["mlp_size"], self.config["recurrent_size"], key=keys[2]
         )
         post = nn.Sequential(
             [
-                nn.Linear(
-                    self.config["recurrent_size"], self.config["mlp_size"], key=keys[2]
+                ortho_linear(
+                    keys[3], self.config["recurrent_size"], self.config["mlp_size"],
                 ),
                 mish,
-                nn.Linear(
-                    self.config["mlp_size"], self.config["mlp_size"], key=keys[3]
+                ortho_linear(
+                    keys[4], self.config["mlp_size"], self.config["mlp_size"], 
                 ),
                 mish,
-                final_layer_init(nn.Linear(self.config["mlp_size"], self.output_size, key=keys[4])),
             ]
         )
         self.post = eqx.filter_vmap(post)
+        value = final_linear(keys[5], self.config["mlp_size"], 1, scale=0.01)
+        self.value = eqx.filter_vmap(value)
+        advantage = final_linear(keys[5], self.config["mlp_size"], self.output_size, scale=0.01)
+        self.advantage = eqx.filter_vmap(advantage)
 
     @eqx.filter_jit
     def scan_fn(self, state, input):
-        x, start, done = input
+        x, start = input
         state = self.memory(x, state * jnp.logical_not(start))
         return state, state
 
+    
     @eqx.filter_jit
     def __call__(self, x, state, start, done, key):
-        #key, pre_key, post_key = random.split(key, 3)
         x = self.pre(x)
-        final_state, state = jax.lax.scan(self.scan_fn, state, (x, start, done))
+        final_state, state = jax.lax.scan(self.scan_fn, state, (x, start))
         y = self.post(state)
-        return y, final_state
+        value = self.value(y)
+        A = self.advantage(y)
+        advantage = A - jnp.mean(A, axis=-1, keepdims=True)
+        q = value + advantage
+        return q, final_state
 
     @eqx.filter_jit
     def initial_state(self, shape=tuple()):

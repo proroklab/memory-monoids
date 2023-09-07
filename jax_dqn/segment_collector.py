@@ -39,7 +39,8 @@ class BatchedSegmentCollector:
         self.sampled_frames = 0
         self.sampled_epochs = 0
         self.episode_id = 0
-        self.episode_reward = {}
+        self.episode_reward = []
+        self.running_reward = 0
         self.best_reward = -np.inf
 
     def update_episodic_reward(self, padded_reward, padded_episode_id):
@@ -57,7 +58,8 @@ class BatchedSegmentCollector:
         segments_to_mean = id_segments[done_segments]
         reward = []
         for s_id in segments_to_mean:
-            reward.append(self.episode_reward.pop(s_id))
+            #reward.append(self.episode_reward.pop(s_id))
+            reward.append(s_id)
         if len(reward) == 0:
             return -np.inf
         return np.mean(reward)
@@ -115,6 +117,8 @@ class BatchedSegmentCollector:
             seq_len = 0
             self.reward = 0
             self.episode_id += 1
+            self.episode_reward = []
+            self.running_reward = 0
 
         for step in range(self.config["steps_per_epoch"]):
             if self.done:
@@ -126,7 +130,9 @@ class BatchedSegmentCollector:
                 self.recurrent_state = q_network.initial_state()
                 seq_lens.append(seq_len)
                 seq_len = 0
+                self.episode_reward.append(self.running_reward)
                 self.reward = 0
+                self.running_reward = 0
                 self.episode_id += 1
 
             seq_len += 1
@@ -155,6 +161,7 @@ class BatchedSegmentCollector:
                 _,
             ) = self.env.step(self.action)
             self.done = terminated or truncated
+            self.running_reward += self.reward
 
             observations[step] = self.observation
             actions[step] = self.action
@@ -183,8 +190,11 @@ class BatchedSegmentCollector:
         transitions = self.split_and_pad(transitions, seq_lens)
         self.sampled_frames += step
         self.sampled_epochs += 1
-        self.update_episodic_reward(transitions['reward'], transitions['episode_id'])
-        episode_reward = self.get_episodic_reward(transitions['episode_id'], transitions["done"])
+        #self.update_episodic_reward(transitions['reward'], transitions['episode_id'])
+        #episode_reward = self.get_episodic_reward(transitions['episode_id'], transitions["done"])
+        episode_reward = np.mean(self.episode_reward)
+        if episode_reward == np.inf:
+            episode_reward = -np.inf
         if episode_reward > self.best_reward:
             self.best_reward = episode_reward
         return (

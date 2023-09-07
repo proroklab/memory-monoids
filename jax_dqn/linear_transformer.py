@@ -5,7 +5,7 @@ import jax
 from jax import random, vmap, lax
 import jax.numpy as jnp
 from modules import Lambda
-from modules import mish, FinalLinear
+from modules import mish
 from utils import expand_right
 
 

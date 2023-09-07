@@ -6,24 +6,25 @@ collect:
   segment_length: 40
   steps_per_epoch: 40
   epochs: 5_000
-  random_epochs: 1_000
-  eps_start: 0.3
+  random_epochs: 2_000
+  eps_start: 0.1
   eps_end: 0.01
   propagate_state: True
 
 train:
   batch_size: 128
-  buffer_size: 15_000 # In segments
   gamma: 0.99
-  target_delay: 200 # In epochs/updates
-  warmup_epochs: 1_000
+  target_delay: 100 # In epochs/updates
   lr: 0.0005
+
+buffer:
+  size: 30_000 # In segments
+  contiguous: False
 
 model:
   name: "GRU"
   mlp_size: 64
   recurrent_size: 64
-  noise_std: 0.017
 
 eval:
   interval: 10

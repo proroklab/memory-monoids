@@ -21,7 +21,7 @@ import tqdm
 import argparse
 import yaml
 
-from modules import epsilon_greedy_policy, anneal
+from modules import epsilon_greedy_policy, anneal, boltzmann_policy
 from linear_transformer import LTQNetwork
 from gru import GRUQNetwork
 from utils import load_popgym_env
@@ -34,6 +34,7 @@ a.add_argument("config", type=str)
 a.add_argument("--seed", "-s", type=int, default=None)
 a.add_argument("--device", "-d", type=str, default="cpu")
 a.add_argument("--wandb", "-w", action="store_true")
+a.add_argument('--name', '-n', type=str, default=None)
 args = a.parse_args()
 
 with open(args.config) as f:
@@ -47,7 +48,7 @@ config["device"] = args.device
 if args.wandb:
     import wandb
 
-    wandb.init(project="jax_segment_dqn", config=config)
+    wandb.init(project="jax_segment_dqn", name=args.name, config=config)
 
 env = load_popgym_env(config)
 eval_env = load_popgym_env(config, eval=True)
@@ -64,7 +65,7 @@ opt = optax.adamw(lr_schedule, weight_decay=0.001)
 
 
 rb = ReplayBuffer(
-    config["train"]["buffer_size"],
+    config["buffer"]["size"],
     {
         "observation": {
             "shape": (config["collect"]["segment_length"], obs_shape),
@@ -81,6 +82,7 @@ rb = ReplayBuffer(
         "mask": {"shape": config["collect"]["segment_length"], "dtype": bool},
         "episode_id": {"shape": config["collect"]["segment_length"], "dtype": np.int64},
     },
+    config["buffer"]["contiguous"]
 )
 
 
@@ -97,23 +99,17 @@ eval_collector = BatchedSegmentCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
 
-epoch_keys = random.split(key, epochs + 1)
-key, epoch_keys = epoch_keys[0], epoch_keys[1:]
-collect_keys = random.split(key, epochs + 1)
-key, collect_keys = collect_keys[0], collect_keys[1:]
-loss_keys = random.split(key, epochs + 1)
-key, loss_keys = loss_keys[0], loss_keys[1:]
-
 for epoch in range(1, epochs + 1):
     pbar.update()
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
     )
+    key, epoch_key, sample_key, loss_key = random.split(key, 4)
     (
         transitions,
         cumulative_reward,
         best_ep_reward
-    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch-1], False)
+    ) = collector(q_network, epsilon_greedy_policy, jnp.array(progress), epoch_key, False)
 
     rb.add(**transitions)
     rb.on_episode_end()
@@ -122,26 +118,35 @@ for epoch in range(1, epochs + 1):
     if epoch <= config["collect"]["random_epochs"]:
         continue
     
-    data = rb.sample(config["train"]["batch_size"], collect_keys[epoch-1])
+    data = rb.sample(config["train"]["batch_size"], sample_key)
 
     transitions_trained += data["mask"].sum()
 
-    outputs, gradient = segment_dqn_loss(
-        q_network, q_target, data, config["train"]["gamma"], loss_keys[epoch-1]
-    )
+    # Triggers recompiles
     # One memory leak comes after here
+    # Because the batch size is variable, so q functions must be recompiled
+    outputs, gradient = segment_dqn_loss(
+        q_network, q_target, data, config["train"]["gamma"], loss_key
+    )
     loss, (q_mean, target_mean, target_network_mean) = outputs
     updates, opt_state = opt.update(
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
+    if epoch % config["train"]["target_delay"] == 0:
+        q_target = hard_update(q_network, q_target)
+    else:
+        q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
     # Eval
     if epoch % config["eval"]["interval"] == 0:
         _, eval_ep_reward, best_eval_ep_reward = eval_collector(
-            q_network, greedy_policy, 1.0, eval_key, True
+            eqx.tree_inference(q_network, True), greedy_policy, 1.0, eval_key, True
         )
+
+    # if epoch % 200:
+    #     q_network.__call__.clear_caches()
+    #     q_target.__call__.clear_caches()
 
     to_log = {
         "collect/epoch": epoch,
@@ -149,7 +154,7 @@ for epoch in range(1, epochs + 1):
         "collect/reward": cumulative_reward,
         "collect/best_reward": best_ep_reward,
         "collect/buffer_capacity": rb.get_stored_size()
-        / config["train"]["buffer_size"],
+        / config["buffer"]["size"],
         "collect/buffer_density": rb.get_density(),
         "collect/transitions": transitions_collected,
         "eval/collect/reward": eval_ep_reward,
@@ -174,7 +179,7 @@ for epoch in range(1, epochs + 1):
         + f"train: {cumulative_reward:.2f}, {best_ep_reward:.2f} "
         + f"loss: {loss:.3f} "
         + f"eps: {anneal(config['collect']['eps_start'], config['collect']['eps_end'], progress):.2f} "
-        + f"buf: {rb.get_stored_size() / config['train']['buffer_size']:.2f} "
+        + f"buf: {rb.get_stored_size() / config['buffer']['size']:.2f} "
         + f"qm: {q_mean:.2f} "
         + f"tm: {target_mean:.2f} "
     )

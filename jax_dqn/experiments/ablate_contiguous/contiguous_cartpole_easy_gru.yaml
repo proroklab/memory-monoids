@@ -1,37 +1,39 @@
 seed: 0
 
 collect:
-  env: "CartPole-v0" #"popgym.envs.PositionOnlyCartPoleEasy"
+  env: "popgym.envs.PositionOnlyCartPoleEasy"
   popgym_env: True
+  segment_length: 40
   steps_per_epoch: 40
-  epochs: 2_000
-  random_epochs: 1_000
-  eps_start: 0.3
+  epochs: 5_000
+  random_epochs: 2_000
+  eps_start: 0.1
   eps_end: 0.01
-  propagate_state: False
+  propagate_state: True
 
 train:
-  batch_size: 256 # In transitions
-  buffer_size: 5_000 # In transitions
+  batch_size: 128
   gamma: 0.99
   target_delay: 100 # In epochs/updates
   lr: 0.0005
-  #lr: 0.0001
+
+buffer:
+  size: 30_000 # In segments
+  contiguous: True
 
 model:
-  name: "MLP"
+  name: "GRU"
   mlp_size: 64
   recurrent_size: 64
-  noise_std: 0.017
 
 eval:
-  interval: 5
-  episodes: 5
+  interval: 10
   collect:
     env: "popgym.envs.PositionOnlyCartPoleEasy"
     popgym_env: True
+    segment_length: 200
     steps_per_epoch: 1_000
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00
-    propagate_state: False
+    propagate_state: True

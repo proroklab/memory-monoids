@@ -9,13 +9,14 @@ class ReplayBuffer:
     """A standard replay buffer using uniform sampling. This
     may be used to implement a segment-based buffer."""
 
-    def __init__(self, buffer_size: int, schema: Dict[str, np.shape]):
+    def __init__(self, buffer_size: int, schema: Dict[str, np.shape], contiguous=False):
         self.data: Dict[str, np.ndarray] = {}
         self.dtypes: Dict[str, np.dtype] = {}
         self.ptr = 0
         self.size = 0
         self.max_size = buffer_size
         self.padding_size = 0
+        self.contiguous = contiguous
         for k, v in schema.items():
             shape = v["shape"]
             if isinstance(shape, int):
@@ -27,8 +28,11 @@ class ReplayBuffer:
 
     def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
         out = {}
-        # idx = np.random.randint(low=0, high=self.size, size=size)
-        idx = jax.random.randint(key, shape=(size,), minval=0, maxval=self.size)
+        if self.contiguous:
+            start_idx = jax.random.randint(key, shape=(), minval=0, maxval=self.size)
+            idx = np.arange(start_idx, start_idx + size) % self.size
+        else:
+            idx = jax.random.randint(key, shape=(size,), minval=0, maxval=self.size)
         for k, v in self.data.items():
             out[k] = v[idx]
         return out

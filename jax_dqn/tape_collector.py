@@ -58,7 +58,7 @@ class TapeCollector:
         if need_reset:
             self.done = self.next_done = False
             key, reset_key = random.split(key)
-            self.observation, self.start, _ = self.env.reset(
+            self.observation, _ = self.env.reset(
                 seed=random.bits(reset_key).item()
             )
             self.recurrent_state = q_network.initial_state()
@@ -70,12 +70,12 @@ class TapeCollector:
             if self.done:
                 self.done = self.next_done = False
                 key, reset_key = random.split(key)
-                self.observation, self.start, _ = self.env.reset(
+                self.observation, _ = self.env.reset(
                     seed=random.bits(reset_key).item()
                 )
                 self.recurrent_state = q_network.initial_state()
                 self.reward = 0
-                self.episode_rewards += self.running_reward
+                self.episode_rewards.append(self.running_reward)
                 self.running_reward = 0
 
 
@@ -100,7 +100,6 @@ class TapeCollector:
                 self.reward,
                 terminated,
                 truncated,
-                _, #self.next_start,
                 _,
             ) = self.env.step(self.action)
             self.done = terminated or truncated
@@ -127,10 +126,13 @@ class TapeCollector:
         self.sampled_frames += step
         self.sampled_epochs += 1
         mean_reward = np.mean(self.episode_rewards)
+        self.episode_rewards = []
+        if mean_reward == np.inf:
+            mean_reward = -np.inf
         if mean_reward > self.best_reward:
             self.best_reward = mean_reward
         return (
             transitions,
-            mean_reward
+            mean_reward,
             self.best_reward
         )

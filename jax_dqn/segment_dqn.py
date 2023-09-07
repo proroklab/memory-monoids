@@ -97,8 +97,14 @@ eval_collector = BatchedSegmentCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
 
+epoch_keys = random.split(key, epochs + 1)
+key, epoch_keys = epoch_keys[0], epoch_keys[1:]
+collect_keys = random.split(key, epochs + 1)
+key, collect_keys = collect_keys[0], collect_keys[1:]
+loss_keys = random.split(key, epochs + 1)
+key, loss_keys = loss_keys[0], loss_keys[1:]
+
 for epoch in range(1, epochs + 1):
-    key, epoch_key = random.split(key)
     pbar.update()
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
@@ -107,7 +113,7 @@ for epoch in range(1, epochs + 1):
         transitions,
         cumulative_reward,
         best_ep_reward
-    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_key, False)
+    ) = collector(q_network, epsilon_greedy_policy, progress, epoch_keys[epoch-1], False)
 
     rb.add(**transitions)
     rb.on_episode_end()
@@ -116,14 +122,12 @@ for epoch in range(1, epochs + 1):
     if epoch <= config["collect"]["random_epochs"]:
         continue
     
-    key, sample_key = random.split(key)
-    data = rb.sample(config["train"]["batch_size"], sample_key)
+    data = rb.sample(config["train"]["batch_size"], collect_keys[epoch-1])
 
     transitions_trained += data["mask"].sum()
 
-    key, loss_key = random.split(key)
     outputs, gradient = segment_dqn_loss(
-        q_network, q_target, data, config["train"]["gamma"], loss_key
+        q_network, q_target, data, config["train"]["gamma"], loss_keys[epoch-1]
     )
     # One memory leak comes after here
     loss, (q_mean, target_mean, target_network_mean) = outputs

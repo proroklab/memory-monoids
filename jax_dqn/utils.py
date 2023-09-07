@@ -4,7 +4,6 @@ from popgym.wrappers import (
     PreviousAction,
     Flatten,
     DiscreteAction,
-    EpisodeStart,
 )
 import gymnasium as gym
 import jax

@@ -28,7 +28,7 @@ class GRUQNetwork(eqx.Module):
         self.config = config
         self.input_size = obs_shape
         self.output_size = act_shape
-        keys = random.split(key, 7)
+        keys = random.split(key, 8)
         pre = nn.Sequential(
             [ortho_linear(keys[1], obs_shape, config["mlp_size"]), mish]
         )
@@ -51,9 +51,9 @@ class GRUQNetwork(eqx.Module):
         self.post = eqx.filter_vmap(post)
         value = final_linear(keys[5], self.config["mlp_size"], 1, scale=0.01)
         self.value = eqx.filter_vmap(value)
-        advantage = final_linear(keys[5], self.config["mlp_size"], self.output_size, scale=0.01)
+        advantage = ortho_linear(keys[6], self.config["mlp_size"], self.output_size)
         self.advantage = eqx.filter_vmap(advantage)
-        scale = final_linear(keys[6], self.config["mlp_size"], 1, scale=0.01)
+        scale = final_linear(keys[7], self.config["mlp_size"], 1, scale=0.01)
         self.scale = eqx.filter_vmap(scale)
 
     @eqx.filter_jit

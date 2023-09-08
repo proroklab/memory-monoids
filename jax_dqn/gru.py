@@ -21,6 +21,7 @@ class GRUQNetwork(eqx.Module):
     post: eqx.Module
     value: eqx.Module
     advantage: eqx.Module
+    scale: eqx.Module
     name: str = "GRU"
 
     def __init__(self, obs_shape, act_shape, config, key):
@@ -52,6 +53,8 @@ class GRUQNetwork(eqx.Module):
         self.value = eqx.filter_vmap(value)
         advantage = final_linear(keys[5], self.config["mlp_size"], self.output_size, scale=0.01)
         self.advantage = eqx.filter_vmap(advantage)
+        scale = final_linear(keys[6], self.config["mlp_size"], 1, scale=0.01)
+        self.scale = eqx.filter_vmap(scale)
 
     @eqx.filter_jit
     def scan_fn(self, state, input):
@@ -65,10 +68,16 @@ class GRUQNetwork(eqx.Module):
         x = self.pre(x)
         final_state, state = jax.lax.scan(self.scan_fn, state, (x, start))
         y = self.post(state)
+
         value = self.value(y)
         A = self.advantage(y)
-        advantage = A - jnp.mean(A, axis=-1, keepdims=True)
-        q = value + advantage
+        scale = self.scale(y)
+
+        A_normed = A / (1e-6 + jnp.linalg.norm(A, axis=-1, keepdims=True))
+        advantage = A_normed - jnp.mean(A_normed, axis=-1, keepdims=True)
+        # TODO: Only use target network for advantage branch
+        # Let value/scale increase as needed
+        q = value + scale * advantage
         return q, final_state
 
     @eqx.filter_jit

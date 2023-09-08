@@ -125,7 +125,7 @@ for epoch in range(1, epochs + 1):
     # Triggers recompiles
     # One memory leak comes after here
     # Because the batch size is variable, so q functions must be recompiled
-    outputs, gradient = segment_dqn_loss(
+    outputs, gradient = segment_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )
     loss, (q_mean, target_mean, target_network_mean) = outputs
@@ -133,10 +133,7 @@ for epoch in range(1, epochs + 1):
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    if epoch % config["train"]["target_delay"] == 0:
-        q_target = hard_update(q_network, q_target)
-    else:
-        q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
+    q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
     # Eval
     if epoch % config["eval"]["interval"] == 0:

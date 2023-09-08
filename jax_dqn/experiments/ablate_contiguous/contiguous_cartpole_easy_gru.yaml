@@ -5,20 +5,20 @@ collect:
   popgym_env: True
   segment_length: 40
   steps_per_epoch: 40
-  epochs: 6_000
-  random_epochs: 2_000
+  epochs: 10_000
+  random_epochs: 10_000
   eps_start: 0.1
   eps_end: 0.01
   propagate_state: True
 
 train:
-  batch_size: 128
+  batch_size: 256
   gamma: 0.99
-  target_delay: 100 # In epochs/updates
-  lr: 0.0005
+  target_delay: 150 # In epochs/updates
+  lr: 0.0004
 
 buffer:
-  size: 30_000 # In segments
+  size: 50_000 # In segments
   contiguous: True
 
 model:

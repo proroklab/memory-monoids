@@ -7,7 +7,8 @@ from jax import random, vmap, nn
 import tracemalloc
 
 # from cpprb import ReplayBuffer
-from buffer import ReplayBuffer
+from buffer import TapeBuffer
+from tape_collector import TapeCollector
 
 # import flax
 # from flax import linen as nn
@@ -26,7 +27,7 @@ from linear_transformer import LTQNetwork
 from gru import GRUQNetwork
 from ffm_model import FFMQNetwork
 from utils import load_popgym_env
-from losses import segment_dqn_loss, segment_constrained_dqn_loss, segment_ddqn_loss
+from losses import segment_dqn_loss, segment_constrained_dqn_loss, segment_ddqn_loss, tape_ddqn_loss
 
 model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork, FFMQNetwork.name: FFMQNetwork}
 
@@ -65,25 +66,25 @@ lr_schedule = optax.cosine_decay_schedule(
 opt = optax.adamw(lr_schedule, weight_decay=0.001)
 
 
-rb = ReplayBuffer(
+rb = TapeBuffer(
     config["buffer"]["size"],
+    "start",
     {
         "observation": {
-            "shape": (config["collect"]["segment_length"], obs_shape),
+            "shape": obs_shape,
             "dtype": np.float32,
         },
-        "action": {"shape": config["collect"]["segment_length"], "dtype": np.int32},
-        "reward": {"shape": config["collect"]["segment_length"], "dtype": np.float32},
+        "action": {"shape": (), "dtype": np.int32},
+        "reward": {"shape": (), "dtype": np.float32},
         "next_observation": {
-            "shape": (config["collect"]["segment_length"], obs_shape),
+            "shape": obs_shape,
             "dtype": np.float32,
         },
-        "start": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "done": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "mask": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "episode_id": {"shape": config["collect"]["segment_length"], "dtype": np.int64},
+        "start": {"shape": (), "dtype": bool},
+        "done": {"shape": (), "dtype": bool},
+        "mask": {"shape": (), "dtype": bool},
+        "episode_id": {"shape": (), "dtype": np.int64},
     },
-    config["buffer"]["contiguous"]
 )
 
 
@@ -95,8 +96,8 @@ opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
 epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
 best_eval_ep_reward = best_ep_reward = eval_ep_reward = ep_reward = -np.inf
-collector = BatchedSegmentCollector(env, config)
-eval_collector = BatchedSegmentCollector(eval_env, config["eval"])
+collector = TapeCollector(env, config)
+eval_collector = TapeCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
 
@@ -114,19 +115,19 @@ for epoch in range(1, epochs + 1):
 
     rb.add(**transitions)
     rb.on_episode_end()
-    transitions_collected += transitions['mask'].sum()
+    transitions_collected += len(transitions['done'])
 
     if epoch <= config["collect"]["random_epochs"]:
         continue
     
     data = rb.sample(config["train"]["batch_size"], sample_key)
 
-    transitions_trained += data["mask"].sum()
+    transitions_trained += len(transitions['done'])
 
     # Triggers recompiles
     # One memory leak comes after here
     # Because the batch size is variable, so q functions must be recompiled
-    outputs, gradient = segment_ddqn_loss(
+    outputs, gradient = tape_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )
     loss, (q_mean, target_mean, target_network_mean) = outputs

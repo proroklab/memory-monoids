@@ -77,6 +77,7 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     selected_q = q_values[
         batch_index, time_index, segment["action"].reshape(-1)
     ].reshape(segment["action"].shape)
+
     next_q_action_idx, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
         segment["next_observation"], initial_state, segment["start"], segment["done"], key
     )
@@ -100,10 +101,38 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     target_network_mean = masked_mean(next_q, segment['mask'])
     return loss, (q_mean, target_mean, target_network_mean)
 
+@eqx.filter_jit
+@partial(eqx.filter_value_and_grad, has_aux=True)
+def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
+    B = tape["reward"].shape[0]
+    initial_state = q_network.initial_state()
+    q_values, _ = q_network(
+        tape["observation"], initial_state, tape["start"], tape["done"], key=key
+    )
+    batch_index = jnp.arange(B)
+    selected_q = q_values[batch_index, tape["action"]]
+
+    next_q_action_idx, _ = jax.lax.stop_gradient(q_network(
+        tape["next_observation"], initial_state, tape["start"], tape["done"], key
+    ))
+    next_q, _ = jax.lax.stop_gradient(q_target(
+        tape["next_observation"], initial_state, tape["start"], tape["done"], key
+    ))
+    # Double DQN
+    next_q = next_q[next_q_action_idx.argmax(-1).flatten()]
+
+    target = tape["reward"] + (1.0 - tape["done"]) * gamma * next_q.max(-1)
+    error = selected_q - target
+    loss = jnp.abs(error)
+    q_mean = jnp.mean(q_values)
+    target_mean = jnp.mean(target)
+    target_network_mean = jnp.mean(next_q)
+    return loss.mean(), (q_mean, target_mean, target_network_mean)
+
 
 @eqx.filter_jit
 @partial(eqx.filter_value_and_grad, has_aux=True)
-def stream_dqn_loss(q_network, q_target, stream, gamma, key):
+def tape_dqn_loss(q_network, q_target, stream, gamma, key):
     B = stream["reward"].shape[0]
     initial_state = q_network.initial_state()
     q_values, _ = q_network(

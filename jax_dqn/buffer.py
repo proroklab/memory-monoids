@@ -100,7 +100,7 @@ class TapeBuffer(ReplayBuffer):
         # This region is guaranteed to be corrupted
         # start_idx = random.choice(self.episode_starts)
         if self.seek_to_start:
-            start_idx = jax.random.choice(key, self.episode_starts)
+            start_idx = jax.random.choice(key, np.array(self.episode_starts))
         else:
             start_idx = jax.random.choice(key, self.size)
         idx = np.arange(start_idx, start_idx + size) % self.max_size

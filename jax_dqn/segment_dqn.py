@@ -24,10 +24,11 @@ import yaml
 from modules import epsilon_greedy_policy, anneal, boltzmann_policy
 from linear_transformer import LTQNetwork
 from gru import GRUQNetwork
+from ffm_model import FFMQNetwork
 from utils import load_popgym_env
 from losses import segment_dqn_loss, segment_constrained_dqn_loss, segment_ddqn_loss
 
-model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork}
+model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork, FFMQNetwork.name: FFMQNetwork}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)

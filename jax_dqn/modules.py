@@ -124,7 +124,7 @@ def epsilon_greedy_policy(
 
 
 def hard_update(network, target):
-    params, _ = eqx.partition(network, eqx.is_inexact_array)
+    params = eqx.filter(network, eqx.is_inexact_array)
     _, static = eqx.partition(target, eqx.is_inexact_array)
     target = eqx.combine(static, params)
     return target

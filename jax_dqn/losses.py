@@ -5,37 +5,6 @@ import equinox as eqx
 
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
-def segment_constrained_dqn_loss(q_network, q_target, segment, gamma):
-    B, T = segment["reward"].shape
-    initial_state = q_network.initial_state()
-    q_values, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0))(
-        segment["observation"], initial_state, segment["start"], segment["done"]
-    )
-    batch_index = jnp.repeat(jnp.arange(B), T)
-    time_index = jnp.tile(jnp.arange(T), B)
-    selected_q = q_values[
-        batch_index, time_index, segment["action"].reshape(-1)
-    ].reshape(segment["action"].shape)
-    next_q_target, _ = eqx.filter_vmap(q_target, in_axes=(0, None, 0, 0))(
-        segment["next_observation"], initial_state, segment["start"], segment["done"]
-    )
-    next_q, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0))(
-        segment["next_observation"], initial_state, segment["start"], segment["done"]
-    )
-    next_q = jnp.minimum(next_q, next_q_target)
-    target = jax.lax.stop_gradient(
-        segment["reward"] + (1.0 - segment["done"]) * gamma * next_q.max(-1)
-    )
-    error = selected_q - target
-    # Cannot jit the loss due to masking
-    loss = jnp.abs(error[segment["mask"]])
-    q_mean = jnp.mean(q_values)
-    target_mean = jnp.mean(target)
-    target_network_mean = jnp.mean(next_q)
-    return loss.mean(), (q_mean, target_mean, target_network_mean)
-
-
-@partial(eqx.filter_value_and_grad, has_aux=True)
 def segment_dqn_loss(q_network, q_target, segment, gamma, key):
     # Double DQN
     B, T = segment["reward"].shape
@@ -48,6 +17,7 @@ def segment_dqn_loss(q_network, q_target, segment, gamma, key):
     selected_q = q_values[
         batch_index, time_index, segment["action"].reshape(-1)
     ].reshape(segment["action"].shape)
+    # TODO: ERROR ERROR THE TARGET NETWORK IS GETTING INCORRECT START/DONE FLAGS
     next_q, _ = jax.lax.stop_gradient(eqx.filter_vmap(q_target, in_axes=(0, None, 0, 0, None))(
         segment["next_observation"], initial_state, segment["start"], segment["done"], key
     ))
@@ -60,12 +30,19 @@ def segment_dqn_loss(q_network, q_target, segment, gamma, key):
     target_network_mean = jnp.mean(next_q)
     return loss.mean(), (q_mean, target_mean, target_network_mean)
 
+
 @jax.jit
-def masked_mean(x, mask):
-    return jnp.sum(x * mask) / mask.sum()
+def mellowmax(x, w):
+    #return jax.nn.logsumexp(w * x, axis=-1) / w
+    return jnp.log(jnp.mean(jnp.exp(w * x), axis=-1)) / w
+
+@jax.jit
+def soft_mellowmax(x, w):
+    #return jax.nn.logsumexp(w * x, axis=-1) / w
+    return 1 / w * jnp.log(jnp.sum(jax.nn.softmax(x, axis=-1) * jnp.exp(w * x), axis=-1))
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
-def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
+def segment_mmdqn_loss(q_network, q_target, segment, gamma, key):
     # Double DQN
     B, T = segment["reward"].shape
     initial_state = q_network.initial_state()
@@ -78,16 +55,72 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
         batch_index, time_index, segment["action"].reshape(-1)
     ].reshape(segment["action"].shape)
 
+    # We need to preload the first observation so the latent state is correct
+    next_obs = jnp.concatenate([segment['observation'][:, 0:1], segment['next_observation'][:, -1:]], axis=1)
+    next_q, _ = jax.lax.stop_gradient(eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
+        segment["next_observation"], initial_state, segment["next_start"], segment["next_done"], key
+    ))
+
+    target = segment["reward"] + (1.0 - segment["done"]) * gamma * mellowmax(next_q, 5.0)
+    error = selected_q - target
+    # Cannot jit the loss due to masking
+    loss = jnp.abs(error[segment["mask"]])
+    q_mean = jnp.mean(q_values)
+    target_mean = jnp.mean(target)
+    target_network_mean = jnp.mean(next_q)
+    return loss.mean(), (q_mean, target_mean, target_network_mean)
+
+
+
+@jax.jit
+def masked_mean(x, mask):
+    return jnp.sum(x * mask) / mask.sum()
+
+@eqx.filter_jit
+@partial(eqx.filter_value_and_grad, has_aux=True)
+def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
+    # Double DQN
+    B, T = segment["next_reward"].shape
+    initial_state = q_network.initial_state()
+    q_values, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
+        segment["observation"], initial_state, segment["start"], segment["next_terminated"], key
+    )
+    batch_index = jnp.repeat(jnp.arange(B), T)
+    time_index = jnp.tile(jnp.arange(T), B)
+    selected_q = q_values[
+        batch_index, time_index, segment["action"].reshape(-1)
+    ].reshape(segment["action"].shape)
+
+    next_segment = {
+        "observation": jnp.concatenate(
+            [segment["observation"][:, :1], segment["next_observation"]],
+            axis=1
+        ),
+        "start": jnp.concatenate(
+            [segment["start"], jnp.zeros((B, 1), dtype=bool)],
+            axis=1
+        ),
+        "terminated": jnp.concatenate(
+            [jnp.zeros((B, 1), dtype=bool), segment["next_terminated"]],
+            axis=1
+        ),
+    }
+
+    # TODO: ERROR ERROR THE TARGET NETWORK IS GETTING INCORRECT START/DONE FLAGS
+    # TODO: We should concatenate obs to next obs to preload the recurrent state
     next_q_action_idx, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
-        segment["next_observation"], initial_state, segment["start"], segment["done"], key
+        next_segment["observation"], initial_state, next_segment["start"], next_segment["terminated"], key
     )
     next_q, _ = jax.lax.stop_gradient(eqx.filter_vmap(q_target, in_axes=(0, None, 0, 0, None))(
-        segment["next_observation"], initial_state, segment["start"], segment["done"], key
+        next_segment["observation"], initial_state, next_segment["start"], next_segment["terminated"], key
     ))
+    # Throw away the first elem as we just needed it to warmstart the recurrent net
+    next_q_action_idx = next_q_action_idx[:, 1:]
+    next_q = next_q[:, 1:]
     # Double DQN
     next_q = next_q[batch_index, time_index, next_q_action_idx.argmax(-1).flatten()].reshape(B, T)
 
-    target = segment["reward"] + (1.0 - segment["done"]) * gamma * next_q
+    target = segment["next_reward"] + (1.0 - segment["next_terminated"]) * gamma * next_q
     error = selected_q - target
     # Cannot jit the loss due to masking
 #    loss = jnp.abs(error[segment["mask"]])

@@ -16,11 +16,10 @@ train:
   gamma: 0.99
   target_delay: 150 # In epochs/updates
   lr: 0.0002
-  grad_accum_interval: 4
 
 buffer:
   size: 50_000 # In segments
-  contiguous: True
+  contiguous: False
 
 model:
   name: "FFM"

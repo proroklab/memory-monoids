@@ -26,14 +26,14 @@ from linear_transformer import LTQNetwork
 from gru import GRUQNetwork
 from ffm_model import FFMQNetwork
 from utils import load_popgym_env
-from losses import segment_dqn_loss, segment_constrained_dqn_loss, segment_ddqn_loss
+from losses import segment_dqn_loss, segment_ddqn_loss, segment_mmdqn_loss
 
 model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork, FFMQNetwork.name: FFMQNetwork}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
 a.add_argument("--seed", "-s", type=int, default=None)
-a.add_argument("--device", "-d", type=str, default="cpu")
+a.add_argument("--debug", "-d", action="store_true")
 a.add_argument("--wandb", "-w", action="store_true")
 a.add_argument('--name', '-n', type=str, default=None)
 args = a.parse_args()
@@ -41,10 +41,12 @@ args = a.parse_args()
 with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
+if args.debug:
+    config["collect"]["random_epochs"] = 0
+
 if args.seed is not None:
     config["seed"] = args.seed
 config["eval"]["seed"] = config["seed"] + 1000
-config["device"] = args.device
 
 if args.wandb:
     import wandb
@@ -73,13 +75,16 @@ rb = ReplayBuffer(
             "dtype": np.float32,
         },
         "action": {"shape": config["collect"]["segment_length"], "dtype": np.int32},
-        "reward": {"shape": config["collect"]["segment_length"], "dtype": np.float32},
+        "next_reward": {"shape": config["collect"]["segment_length"], "dtype": np.float32},
         "next_observation": {
             "shape": (config["collect"]["segment_length"], obs_shape),
             "dtype": np.float32,
         },
         "start": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "done": {"shape": config["collect"]["segment_length"], "dtype": bool},
+        #"next_start": {"shape": config["collect"]["segment_length"], "dtype": bool},
+        #"done": {"shape": config["collect"]["segment_length"], "dtype": bool},
+        "next_terminated": {"shape": config["collect"]["segment_length"], "dtype": bool},
+        "next_truncated": {"shape": config["collect"]["segment_length"], "dtype": bool},
         "mask": {"shape": config["collect"]["segment_length"], "dtype": bool},
         "episode_id": {"shape": config["collect"]["segment_length"], "dtype": np.int64},
     },
@@ -123,9 +128,6 @@ for epoch in range(1, epochs + 1):
 
     transitions_trained += data["mask"].sum()
 
-    # Triggers recompiles
-    # One memory leak comes after here
-    # Because the batch size is variable, so q functions must be recompiled
     outputs, gradient = segment_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )
@@ -134,13 +136,22 @@ for epoch in range(1, epochs + 1):
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
+    # if epoch % config["train"]["target_delay"] == 0:
+    #     q_target = hard_update(q_network, q_target)
     q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
     # Eval
     if epoch % config["eval"]["interval"] == 0:
-        _, eval_ep_reward, best_eval_ep_reward = eval_collector(
-            eqx.tree_inference(q_network, True), greedy_policy, 1.0, eval_key, True
-        )
+        eval_keys = random.split(eval_key, config["eval"]["episodes"])
+        eval_rewards = []
+        for i in range(config["eval"]["episodes"]):
+            _, eval_ep_reward, _ = eval_collector(
+                eqx.tree_inference(q_network, True), greedy_policy, 1.0, eval_keys[i], True
+            )
+            eval_rewards.append(eval_ep_reward)
+        eval_ep_reward = np.mean(eval_rewards)
+        if eval_ep_reward > best_eval_ep_reward:
+            best_eval_ep_reward = eval_ep_reward
 
     # if epoch % 200:
     #     q_network.__call__.clear_caches()

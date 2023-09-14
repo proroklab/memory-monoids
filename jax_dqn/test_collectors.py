@@ -1,4 +1,5 @@
 from tape_collector import TapeCollector
+from segment_collector import BatchedSegmentCollector
 import unittest
 import gymnasium as gym
 import numpy as np
@@ -37,11 +38,26 @@ class FakeQNet:
         self.s += 1
         return np.array(self.s)
 
+# class TestTapeCollector(unittest.TestCase):
+#     def test_seq(self):
+#         env = FakeEnv()
+#         config = {"collect": {"steps_per_epoch": 3, "random_epochs": 0, "eps_start": 0, "eps_end": 0}}
+#         collector = TapeCollector(env, config)
+#         for i in range(3):
+#             trans, reward, best_reward = collector(
+#                 q_network=FakeQNet(),
+#                 policy=fake_policy,
+#                 progress=0,
+#                 key=jax.random.PRNGKey(0),
+#                 )
+#             for k, v in trans.items():
+#                 print(f"({i}) {k}: {v}")
+
 class TestTapeCollector(unittest.TestCase):
     def test_seq(self):
         env = FakeEnv()
-        config = {"collect": {"steps_per_epoch": 3, "random_epochs": 0, "eps_start": 0, "eps_end": 0}}
-        collector = TapeCollector(env, config)
+        config = {"collect": {"steps_per_epoch": 3, "random_epochs": 0, "eps_start": 0, "eps_end": 0, "segment_length": 3}}
+        collector = BatchedSegmentCollector(env, config)
         for i in range(3):
             trans, reward, best_reward = collector(
                 q_network=FakeQNet(),
@@ -49,6 +65,9 @@ class TestTapeCollector(unittest.TestCase):
                 progress=0,
                 key=jax.random.PRNGKey(0),
                 )
+            # for k, v in trans.items():
+            #     print(f"({i}) {k}: {v}")
+        #breakpoint()
         
 if __name__ == '__main__':
     unittest.main()

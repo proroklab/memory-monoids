@@ -24,45 +24,44 @@ from jax import random
 
 
 class BatchedSegmentCollector:
+    # Lifetime variables
+    sampled_frames = 0
+    sampled_epochs = 0
+    episode_id = 0
+    best_reward = -np.inf
+
+    # Discarded state between calls
+    episode_reward = []
+    seq_lens = []
+    seq_len = 0
+
     def __init__(self, env, config):
         self.env = env
         self.config = config["collect"]
         self.obs_shape = env.observation_space.shape[0]
         self.act_shape = env.action_space.n
 
-        self.observation = None
-        self.next_observation = None
-        self.action = None
-        self.reward = None
-        self.done = True
-        self.start = True
-        self.sampled_frames = 0
-        self.sampled_epochs = 0
-        self.episode_id = 0
-        self.episode_reward = []
-        self.running_reward = 0
-        self.best_reward = -np.inf
-
-    def update_episodic_reward(self, padded_reward, padded_episode_id):
-        segment_rewards = np.cumsum(padded_reward, axis=1)[:,-1]
-        episode_ids = padded_episode_id[:, 0]
-
-        for e_id, reward in zip(episode_ids, segment_rewards): 
-            self.episode_reward.update(
-                {e_id: reward}
-            )
-
-    def get_episodic_reward(self, padded_episode_id, done):
-        done_segments = np.any(done, axis=1)
-        id_segments = padded_episode_id[:,0]
-        segments_to_mean = id_segments[done_segments]
-        reward = []
-        for s_id in segments_to_mean:
-            #reward.append(self.episode_reward.pop(s_id))
-            reward.append(s_id)
-        if len(reward) == 0:
-            return -np.inf
-        return np.mean(reward)
+    def simple_split_and_pad(self, arrays: Dict[str, np.ndarray], seq_len):
+        # First split at episode boundaries
+        max_len = self.config["segment_length"]
+        # Add on the final sequence idx (this should be equal to segment_length)
+        #seq_lens = seq_lens + [max_len - seq_lens[-1]]
+        arrays['mask'] = np.ones_like(arrays['start'])
+        output = {}
+        for name, array in arrays.items():
+            #episodes = np.array_split(array, episode_offsets)
+            episode = array[:seq_len]
+            fragments = [
+                frag 
+                for frag in np.array_split(episode, np.arange(max_len, episode.shape[0], max_len)) 
+            ]
+            # Pad fragments into segments
+            segments = [
+                np.concatenate([frag, np.zeros((max_len - len(frag), *frag.shape[1:]), dtype=frag.dtype)], axis=0)
+                for frag in fragments
+            ]
+            output[name] = np.stack(segments, axis=0)
+        return output
 
     def split_and_pad(self, arrays: Dict[str, np.ndarray], seq_lens):
         # First split at episode boundaries
@@ -88,120 +87,117 @@ class BatchedSegmentCollector:
             output[name] = np.stack(segments, axis=0)
         return output
 
-
     def __call__(self, q_network, policy, progress, key, need_reset=False):
-        observations = np.zeros(
-            (self.config["steps_per_epoch"], self.obs_shape), np.float32
-        )
-        actions = np.zeros((self.config["steps_per_epoch"]), np.int32)
-        rewards = np.zeros((self.config["steps_per_epoch"]), np.float32)
-        next_observations = np.zeros(
-            (self.config["steps_per_epoch"], self.obs_shape), dtype=np.float32
-        )
-        dones = np.zeros((self.config["steps_per_epoch"]), dtype=bool)
-        starts = np.zeros((self.config["steps_per_epoch"]), dtype=bool)
-        episode_id = -1 * np.ones((self.config["steps_per_epoch"]), np.int64)
-        mask = np.zeros((self.config["steps_per_epoch"]), dtype=bool)
-
-        seq_len = 0
+        observations = []
+        actions = []
+        next_rewards = []
+        terminateds = []
+        truncateds = []
+        starts = []
+        episode_ids = []
         seq_lens = []
+        episode_reward = []
+        seq_len = 0
 
-        if need_reset:
-            self.done = self.next_done = False
-            self.start = True
-            key, reset_key = random.split(key)
-            self.observation, _ = self.env.reset(
-                seed=random.bits(reset_key).item()
-            )
-            self.recurrent_state = q_network.initial_state()
-            seq_lens.append(seq_len)
-            seq_len = 0
-            self.reward = 0
-            self.episode_id += 1
-            self.running_reward = 0
+        key, reset_key = random.split(key)
+        observation, _ = self.env.reset(seed=random.bits(key).item())
+        #done = False
+        terminated = False
+        truncated = False
+        start = True
 
-        self.episode_reward = []
-        for step in range(self.config["steps_per_epoch"]):
-            if self.done:
-                self.done = self.next_done = False
-                self.start = True
-                key, reset_key = random.split(key)
-                self.observation, _ = self.env.reset(
-                    seed=random.bits(reset_key).item()
-                )
-                self.recurrent_state = q_network.initial_state()
-                seq_lens.append(seq_len)
-                seq_len = 0
-                self.episode_reward.append(self.running_reward)
-                self.reward = 0
-                self.running_reward = 0
-                self.episode_id += 1
+        observations.append(observation)
+        #dones.append(done)
+        terminateds.append(terminated)
+        truncateds.append(truncated)
+        starts.append(start)
 
-            seq_len += 1
-
+        running_reward = 0
+        self.episode_id += 1
+        recurrent_state = q_network.initial_state()
+        #for step in range(self.config["steps_per_epoch"]):
+        step = 0
+        while not (terminated or truncated):
             if self.sampled_epochs < self.config["random_epochs"]:
-                self.action = self.env.action_space.sample()
+                action = self.env.action_space.sample()
             else:
                 key, action_key = random.split(key)
-                self.action, self.recurrent_state = policy(
+                action, recurrent_state = policy(
                     q_network=q_network,
-                    x=self.observation,
-                    state=self.recurrent_state,
-                    start=np.array([self.start]),
-                    done=np.array([self.done]),
-                    #done=np.array([False]),
+                    x=observation,
+                    state=recurrent_state,
+                    start=np.array([start]),
+                    done=np.array([terminated or truncated]),
                     progress=progress,
                     epsilon_start=self.config["eps_start"],
                     epsilon_end=self.config["eps_end"],
                     key=action_key,
                 )
-                self.action = self.action.item()
+                action = action.item()
             (
-                self.next_observation,
-                self.reward,
+                observation,
+                reward,
                 terminated,
                 truncated,
                 _,
-            ) = self.env.step(self.action)
-            self.done = terminated or truncated
-            self.running_reward += self.reward
+            ) = self.env.step(action)
+            #self.next_done = bool(terminated or truncated)
+            #done = bool(terminated or truncated)
 
-            observations[step] = self.observation
-            actions[step] = self.action
-            rewards[step] = self.reward
-            next_observations[step] = self.next_observation
-            starts[step] = self.start
-            dones[step] = self.done
-            mask[step] = True
-            episode_id[step] = self.episode_id
-            self.observation = self.next_observation
-            #self.start = self.next_start
-            self.start = False
+            observations.append(observation)
+            #dones.append(done)
+            terminateds.append(terminated)
+            truncateds.append(truncated)
+            starts.append(False)
+            actions.append(action)
+            episode_ids.append(self.episode_id)
+            next_rewards.append(reward)
+            #print(f'appending cur {self.observation} next {self.next_observation}, d {self.next_done}')
+            #print(observations, next_observations)
+
+            running_reward += reward
+            step += 1
 
         transitions = {
-            "observation": observations, 
-            "action": actions, 
-            "reward": rewards, 
-            "next_observation": next_observations, 
-            "start": starts, 
-            "done": dones, 
-            "mask": mask, 
-            "episode_id": episode_id,
+            "observation": np.array(observations[:-1]), 
+            "action": np.array(actions), 
+            "next_reward": np.array(next_rewards), 
+            "next_observation": np.array(observations[1:]),
+            #"start": np.array(starts[:-1]), 
+            #"next_start": np.array(starts[1:]),
+            #"done": np.array(dones[:-1]), 
+            #"next_done": np.array(dones[1:]),
+            "next_terminated": np.array(terminateds[1:]),
+            "next_truncated": np.array(truncateds[1:]),
+            "start": np.array(starts[:-1]), 
+            #"next_start": np.array(starts[1:]),
+            "mask": np.ones(len(next_rewards), dtype=bool),
+            "episode_id": np.array(episode_ids),
         }
-        # Last episode will be truncated
-        seq_lens.append(self.config['steps_per_epoch'] - sum(seq_lens))
-        transitions = self.split_and_pad(transitions, seq_lens)
+        # Validate
+        # for k in ['observation', 'done']:
+        #     masked = transitions[k][transitions['mask']]
+        #     masked_next = transitions['next_' + k][transitions['mask']]
+        #     if not np.all(masked[1:] == masked_next[:-1]):
+        #         raise RuntimeError("Collector did something naughty")
+
+        # for k in transitions:
+        #     transitions[k] = np.concatenate([
+        #         transitions[k], 
+        #         np.zeros(
+        #             shape=(self.config['steps_per_epoch'] - len(transitions[k]), *transitions[k].shape[1:]), 
+        #             dtype=transitions[k].dtype)
+        #     ], axis=0)
+
+        transitions = self.simple_split_and_pad(transitions, len(actions))
+
+
         self.sampled_frames += step
         self.sampled_epochs += 1
-        #self.update_episodic_reward(transitions['reward'], transitions['episode_id'])
-        #episode_reward = self.get_episodic_reward(transitions['episode_id'], transitions["done"])
-        episode_reward = np.mean(self.episode_reward)
-        if episode_reward == np.inf:
-            episode_reward = -np.inf
-        if episode_reward > self.best_reward:
-            self.best_reward = episode_reward
+        if running_reward > self.best_reward:
+            self.best_reward = running_reward
         return (
             transitions,
-            episode_reward, 
+            running_reward, 
             self.best_reward
         )

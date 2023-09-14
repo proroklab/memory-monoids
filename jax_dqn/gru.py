@@ -11,6 +11,12 @@ class StochasticSequential(nn.Sequential):
     def __call__(self, x, key):
         return super().__call__(x, key=key)
 
+@jax.jit
+def ln(x, key):
+    shifted = x - x.mean(axis=-1, keepdims=True)
+    scaled = shifted / jnp.sqrt(1e-6 + jnp.var(x, axis=-1, keepdims=True))
+    return scaled
+
 
 class GRUQNetwork(eqx.Module):
     input_size: int
@@ -59,7 +65,8 @@ class GRUQNetwork(eqx.Module):
     @eqx.filter_jit
     def scan_fn(self, state, input):
         x, start = input
-        state = self.memory(x, state * jnp.logical_not(start))
+        #state = self.memory(x, state * jnp.logical_not(start))
+        state = self.memory(x, state)
         return state, state
 
     
@@ -74,6 +81,7 @@ class GRUQNetwork(eqx.Module):
         scale = self.scale(y)
 
         A_normed = A / (1e-6 + jnp.linalg.norm(A, axis=-1, keepdims=True))
+        A_normed = A / A.max(axis=-1, keepdims=True) 
         advantage = A_normed - jnp.mean(A_normed, axis=-1, keepdims=True)
         # TODO: Only use target network for advantage branch
         # Let value/scale increase as needed

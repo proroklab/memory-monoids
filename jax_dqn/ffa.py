@@ -45,9 +45,7 @@ def associative_update(
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
     state, i, _ = carry
     x, j, start = incoming
-    #state = state * gamma(params, j - i) * jnp.logical_not(done) + x
-    state = state * jnp.logical_not(start)
-    state = state * gamma(params, j - i)  + x
+    state = jnp.logical_not(start) * state * gamma(params, j - i) + x
     return state, j, start
 
 
@@ -60,9 +58,7 @@ def apply(
     a, b = params
     memory_size, context_size = len(a), len(b)
 
-    # [-1, 0, 1, ....]
-    # TODO: Should this be [0, 0, 1, ...] ?
-    timestep = jnp.arange(-1, x.shape[0], dtype=jnp.float32)
+    timestep = jnp.arange(x.shape[0] + 1, dtype=jnp.float32)
     timestep = jax.lax.complex(timestep, jnp.zeros_like(timestep))
 
     # [prev_state, x_0, x_1, ...]
@@ -71,8 +67,6 @@ def apply(
     x = jnp.concatenate([state, x], axis=0)
 
     # [False, ...]
-    # done = jnp.concatenate([jnp.array([False]), done], axis=0)
-    # done = done.reshape(done.shape[0], 1, 1)
     start = jnp.concatenate([jnp.array([False]), start], axis=0)
     start = start.reshape(start.shape[0], 1, 1)
     
@@ -89,3 +83,4 @@ if __name__ == "__main__":
     s = initial_state(params)
     start = jnp.zeros(5, dtype=bool)
     result = apply(params, x, s, start)
+    breakpoint()

@@ -57,6 +57,7 @@ class TapeCollector:
 
         if need_reset:
             self.done = self.next_done = False
+            self.start = True
             key, reset_key = random.split(key)
             self.observation, _ = self.env.reset(
                 seed=random.bits(reset_key).item()
@@ -66,16 +67,18 @@ class TapeCollector:
             self.running_reward = 0
             self.episode_id += 1
 
+        self.episode_rewards = []
         for step in range(self.config["steps_per_epoch"]):
             if self.done:
                 self.done = self.next_done = False
+                self.start = True
                 key, reset_key = random.split(key)
                 self.observation, _ = self.env.reset(
                     seed=random.bits(reset_key).item()
                 )
                 self.recurrent_state = q_network.initial_state()
-                self.reward = 0
                 self.episode_rewards.append(self.running_reward)
+                self.reward = 0
                 self.running_reward = 0
 
 
@@ -126,7 +129,6 @@ class TapeCollector:
         self.sampled_frames += step
         self.sampled_epochs += 1
         mean_reward = np.mean(self.episode_rewards)
-        self.episode_rewards = []
         if mean_reward == np.inf:
             mean_reward = -np.inf
         if mean_reward > self.best_reward:

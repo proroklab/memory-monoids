@@ -64,8 +64,8 @@ class FFMQNetwork(eqx.Module):
     @eqx.filter_jit
     def __call__(self, x, state, start, done, key):
         x = self.pre(x)
-        start = jnp.zeros_like(start)
-        output, state = self.memory(x, state, start, key=key)
+        #start = jnp.zeros_like(start)
+        output, state = self.memory(x=x, state=state, start=start, key=key)
         y = self.post(output)
 
         value = self.value(y)

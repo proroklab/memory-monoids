@@ -1,0 +1,40 @@
+seed: 0
+
+collect:
+  env: "popgym.envs.PositionOnlyCartPoleEasy"
+  popgym_env: True
+  segment_length: 40
+  steps_per_epoch: 40
+  epochs: 10_000
+  random_epochs: 10_000
+  eps_start: 0.1
+  eps_end: 0.01
+  propagate_state: True
+
+train:
+  batch_size: 256
+  gamma: 0.99
+  target_delay: 150 # In epochs/updates
+  lr: 0.0002
+  grad_accum_interval: 4
+
+buffer:
+  size: 50_000 # In segments
+  contiguous: True
+
+model:
+  name: "FFM"
+  mlp_size: 64
+  recurrent_size: 128
+
+eval:
+  interval: 10
+  collect:
+    env: "popgym.envs.PositionOnlyCartPoleEasy"
+    popgym_env: True
+    segment_length: 200
+    steps_per_epoch: 1_000
+    random_epochs: 0
+    eps_start: 0.0
+    eps_end: 0.00
+    propagate_state: True

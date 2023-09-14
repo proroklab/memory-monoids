@@ -108,6 +108,7 @@ class BatchedSegmentCollector:
 
         if need_reset:
             self.done = self.next_done = False
+            self.start = True
             key, reset_key = random.split(key)
             self.observation, _ = self.env.reset(
                 seed=random.bits(reset_key).item()
@@ -117,12 +118,13 @@ class BatchedSegmentCollector:
             seq_len = 0
             self.reward = 0
             self.episode_id += 1
-            self.episode_reward = []
             self.running_reward = 0
 
+        self.episode_reward = []
         for step in range(self.config["steps_per_epoch"]):
             if self.done:
                 self.done = self.next_done = False
+                self.start = True
                 key, reset_key = random.split(key)
                 self.observation, _ = self.env.reset(
                     seed=random.bits(reset_key).item()
@@ -147,6 +149,7 @@ class BatchedSegmentCollector:
                     state=self.recurrent_state,
                     start=np.array([self.start]),
                     done=np.array([self.done]),
+                    #done=np.array([False]),
                     progress=progress,
                     epsilon_start=self.config["eps_start"],
                     epsilon_end=self.config["eps_end"],

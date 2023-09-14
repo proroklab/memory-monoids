@@ -3,6 +3,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import random
+from collections import deque
 
 
 class ReplayBuffer:
@@ -91,7 +92,7 @@ class TapeBuffer(ReplayBuffer):
         self.start_key = start_key
         self.seek_to_start = seek_to_start
         if self.seek_to_start:
-            self.episode_starts = []
+            self.episode_starts = deque()
         assert self.data[start_key].ndim == 1
 
     def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
@@ -119,14 +120,40 @@ class TapeBuffer(ReplayBuffer):
             # TODO: We need to zero the data after the episode starts?
             # Or what happens? We will replay a partial episode
             # At most 1 partial episode will exist, can we ignore it?
-            self.episode_starts = [
-                e
-                for e in self.episode_starts
-                if e < self.ptr or e > (self.ptr + batch_size) % self.max_size
-            ]
+
+            # TODO: Find starts that we are going to overwrite
+            # and remove them from the list
+            if len(self.episode_starts) > 0 and (self.size + batch_size) >= self.max_size: 
+                while True:
+                    if self.episode_starts[0] >= self.ptr and self.episode_starts[0] < self.ptr + batch_size:
+                        self.episode_starts.popleft()
+                    else:
+                        break
+
+
+            # Handle overflows
+            # overflowed = bool((self.ptr + batch_size) // self.max_size)
+            # if overflowed:
+            #     self.episode_starts = [
+            #         e
+            #         for e in self.episode_starts
+            #         if e < self.ptr and e > (self.ptr + batch_size) % self.max_size
+            #     ]
+            # else:
+            #     self.episode_starts = [
+            #         e
+            #         for e in self.episode_starts
+            #         if e < self.ptr or e > (self.ptr + batch_size)
+            #     ]
+            # self.episode_starts = [
+            #     e
+            #     for e in self.episode_starts
+            #     if e < self.ptr or e > (self.ptr + batch_size) % self.max_size
+            # ]
             # New episode starts
-            new_starts = (self.ptr + data[self.start_key].nonzero()[0]) % self.max_size
-            self.episode_starts += new_starts.tolist()
+            #new_starts = (self.ptr + data[self.start_key].nonzero()[0]) % self.max_size
+            new_starts = self.ptr + np.flatnonzero(idx * data[self.start_key])
+            self.episode_starts.extend(new_starts.tolist())
 
         self.ptr = (self.ptr + batch_size) % self.max_size
         self.size = min(self.size + batch_size, self.max_size)

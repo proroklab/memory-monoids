@@ -44,8 +44,6 @@ class BatchedSegmentCollector:
     def simple_split_and_pad(self, arrays: Dict[str, np.ndarray], seq_len):
         # First split at episode boundaries
         max_len = self.config["segment_length"]
-        # Add on the final sequence idx (this should be equal to segment_length)
-        #seq_lens = seq_lens + [max_len - seq_lens[-1]]
         arrays['mask'] = np.ones_like(arrays['start'])
         output = {}
         for name, array in arrays.items():
@@ -141,6 +139,7 @@ class BatchedSegmentCollector:
                 truncated,
                 _,
             ) = self.env.step(action)
+            start = False
             #self.next_done = bool(terminated or truncated)
             #done = bool(terminated or truncated)
 

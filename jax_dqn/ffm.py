@@ -64,7 +64,7 @@ class FFM(eqx.Module):
     @jax.jit
     @eqx.filter_jit
     def __call__(
-        self, x: jax.Array, state: jax.Array, start: jax.Array, key
+        self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
         #gate_in = vmap(self.gate_in)(x)
         pre = vmap(self.pre)(x)
@@ -72,7 +72,7 @@ class FFM(eqx.Module):
         #gated_x = pre / jnp.linalg.norm(pre, axis=-1, keepdims=True) * gate_in
         #pre = vmap(jax.nn.relu)(vmap(self.pre)(x))
         #gated_x = gated_x / jnp.linalg.norm(gated_x, axis=-1, keepdims=True)
-        state = partial(ffa.apply, self.ffa_params)(pre, state, start)
+        state = partial(ffa.apply, self.ffa_params)(pre, state, start, next_done)
         z_in = jnp.concatenate([jnp.real(state), jnp.imag(state)], axis=-1).reshape(
             state.shape[0], -1
         )

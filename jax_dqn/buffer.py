@@ -100,6 +100,7 @@ class TapeBuffer(ReplayBuffer):
         # TODO: Should not sample between ptr and the next index
         # This region is guaranteed to be corrupted
         # start_idx = random.choice(self.episode_starts)
+        assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
         if self.seek_to_start:
             start_idx = jax.random.choice(key, np.array(self.episode_starts))
         else:

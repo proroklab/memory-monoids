@@ -43,6 +43,7 @@ with open(args.config) as f:
 
 if args.debug:
     config["collect"]["random_epochs"] = 0
+    jax.config.update('jax_disable_jit', True)
 
 if args.seed is not None:
     config["seed"] = args.seed

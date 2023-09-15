@@ -27,14 +27,14 @@ from linear_transformer import LTQNetwork
 from gru import GRUQNetwork
 from ffm_model import FFMQNetwork
 from utils import load_popgym_env
-from losses import segment_dqn_loss, segment_constrained_dqn_loss, segment_ddqn_loss, tape_ddqn_loss
+from losses import segment_dqn_loss, tape_ddqn_loss
 
 model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork, FFMQNetwork.name: FFMQNetwork}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
 a.add_argument("--seed", "-s", type=int, default=None)
-a.add_argument("--device", "-d", type=str, default="cpu")
+a.add_argument("--debug", "-d", action="store_true")
 a.add_argument("--wandb", "-w", action="store_true")
 a.add_argument('--name', '-n', type=str, default=None)
 args = a.parse_args()
@@ -42,10 +42,13 @@ args = a.parse_args()
 with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
+if args.debug:
+    config["collect"]["random_epochs"] = 500
+    jax.config.update('jax_disable_jit', True)
+
 if args.seed is not None:
     config["seed"] = args.seed
 config["eval"]["seed"] = config["seed"] + 1000
-config["device"] = args.device
 
 if args.wandb:
     import wandb
@@ -75,14 +78,15 @@ rb = TapeBuffer(
             "dtype": np.float32,
         },
         "action": {"shape": (), "dtype": np.int32},
-        "reward": {"shape": (), "dtype": np.float32},
+        "next_reward": {"shape": (), "dtype": np.float32},
         "next_observation": {
             "shape": obs_shape,
             "dtype": np.float32,
         },
         "start": {"shape": (), "dtype": bool},
-        "done": {"shape": (), "dtype": bool},
-        "mask": {"shape": (), "dtype": bool},
+        "next_terminated": {"shape": (), "dtype": bool},
+        "next_truncated": {"shape": (), "dtype": bool},
+        "next_done": {"shape": (), "dtype": bool},
         "episode_id": {"shape": (), "dtype": np.int64},
     },
 )
@@ -115,14 +119,14 @@ for epoch in range(1, epochs + 1):
 
     rb.add(**transitions)
     rb.on_episode_end()
-    transitions_collected += len(transitions['done'])
+    transitions_collected += len(transitions['next_reward'])
 
     if epoch <= config["collect"]["random_epochs"]:
         continue
-    
+
     data = rb.sample(config["train"]["batch_size"], sample_key)
 
-    transitions_trained += len(transitions['done'])
+    transitions_trained += len(transitions['next_reward'])
 
     # Triggers recompiles
     # One memory leak comes after here

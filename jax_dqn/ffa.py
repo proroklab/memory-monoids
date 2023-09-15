@@ -37,6 +37,16 @@ def gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
     return jnp.exp(log_gamma(params, t))
 
 
+# Currently, next_done points to the final obs in an episode
+# and start points to the initial obs in an episode
+# obs:       [0, 1, 1, 0, 1] (here the zero is the initial obs of an episode)
+# start:     [1, 0, 0, 1, 0]
+# prev_start:[0, 1, 0, 0, 1]
+# done:      [0, 0, 0, 1, 0]
+# next_done: [0, 0, 1, 0, 0]
+# During inference, "next_done" will never be received because we only
+# ever see one step/episode at a time.
+# This is probably what we want (to only use next_done during training)
 @jax.jit
 def associative_update(
     params: Tuple[jax.Array, jax.Array],
@@ -45,36 +55,84 @@ def associative_update(
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
     state, i, _ = carry
     x, j, start = incoming
-    state = jnp.logical_not(start) * state * gamma(params, j - i) + x
+    # VALIDATED: Only need start...
+    state = state * gamma(params, j - i) * jnp.logical_not(start) + x
     return state, j, start
+
+
+def apply_one_ep(params, x, state, done):
+    xs = []
+    i = 0
+    for i in range(len(done)):
+        state = state * gamma(params, jnp.array([1])) + x[i:i+1]
+        xs.append(state)
+        if done[i]:
+            break
+        i += 1
+    return jnp.array(xs)
+
 
 
 @jax.jit
 def apply(
-    params: Tuple[jax.Array, jax.Array], x: jax.Array, state: jax.Array, start: jax.Array
+    params: Tuple[jax.Array, jax.Array], x: jax.Array, state: jax.Array, start: jax.Array, next_done: jax.Array
 ) -> jax.Array:
     # x: [T, memory_size]
     # memory: [1, memory_size, context_size]
     a, b = params
-    memory_size, context_size = len(a), len(b)
 
-    timestep = jnp.arange(x.shape[0] + 1, dtype=jnp.float32)
-    timestep = jax.lax.complex(timestep, jnp.zeros_like(timestep))
-
-    # [prev_state, x_0, x_1, ...]
-    x = jnp.repeat(x.reshape(*x.shape, 1), context_size, axis=-1)
-    x = jax.lax.complex(x, jnp.zeros_like(x))
-    x = jnp.concatenate([state, x], axis=0)
-
-    # [False, ...]
-    start = jnp.concatenate([jnp.array([False]), start], axis=0)
+    timestep = jnp.arange(x.shape[0], dtype=jnp.complex64)
+    # Add context dim
+    x = jnp.expand_dims(x, axis=-1).astype(jnp.complex64)
     start = start.reshape(start.shape[0], 1, 1)
-    
+    next_done = next_done.reshape(next_done.shape[0], 1, 1)
     parameterized_update = partial(associative_update, params)
-    state, _, _ = jax.lax.associative_scan(
+
+    x = jnp.logical_not(start[0:1]) * state * gamma(params, jnp.array([1])) + x
+    # This is not executed during inference -- method will just return x if size is 1
+    new_state, _, _ = jax.lax.associative_scan(
         parameterized_update, (x, timestep, start), axis=0
     )
-    return state[1:]
+    return new_state
+
+
+    
+
+
+
+#    timestep = jnp.arange(x.shape[0] + 1, dtype=jnp.float32)
+#    timestep = jax.lax.complex(timestep, jnp.zeros_like(timestep))
+#
+#    # [prev_state, x_0, x_1, ...]
+#    x = jnp.repeat(x.reshape(*x.shape, 1), context_size, axis=-1)
+#    original_x = x.copy()
+#    x = jax.lax.complex(x, jnp.zeros_like(x))
+#    x = jnp.concatenate([state, x], axis=0)
+#
+#    # [False, ...]
+#    # Has no effect since we discard the first state anyways
+#    start = jnp.concatenate([jnp.array([False]), start], axis=0)
+#    start = start.reshape(start.shape[0], 1, 1)
+#    next_done = jnp.concatenate([jnp.array([False]), next_done], axis=0)
+#    next_done = next_done.reshape(next_done.shape[0], 1, 1)
+#    
+#    parameterized_update = partial(associative_update, params)
+#    new_state, _, _, _ = jax.lax.associative_scan(
+#        parameterized_update, (x, timestep, start, next_done), axis=0
+#    )
+#    desired_val = (state * gamma(params, jnp.array([1])) + original_x)[0,0,0]
+#    true_val = new_state[1,0,0]
+#    true_val_no_boundary = jax.lax.associative_scan(
+#        parameterized_update, (x, timestep, jnp.zeros_like(start), jnp.zeros_like(next_done)), axis=0
+#    )[0][1,0,0]
+#    # TODO: It seems like we are outputing padding for ours?
+#    # x is not going in at the first timestep
+#    print(desired_val)
+#    print(true_val)
+#    print(true_val_no_boundary)
+#    breakpoint()
+#
+#    return new_state[1:]
 
 
 if __name__ == "__main__":

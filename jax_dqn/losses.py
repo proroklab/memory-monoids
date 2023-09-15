@@ -76,7 +76,7 @@ def segment_mmdqn_loss(q_network, q_target, segment, gamma, key):
 def masked_mean(x, mask):
     return jnp.sum(x * mask) / mask.sum()
 
-#@eqx.filter_jit
+@eqx.filter_jit
 @partial(eqx.filter_value_and_grad, has_aux=True)
 def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     # Double DQN

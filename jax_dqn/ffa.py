@@ -56,7 +56,7 @@ def associative_update(
     state, i, _ = carry
     x, j, start = incoming
     # VALIDATED: Only need start...
-    state = state * gamma(params, j - i) * jnp.logical_not(start) + x
+    state = state * gamma(params,  j - i) * jnp.logical_not(start) + x
     return state, j, start
 
 
@@ -88,6 +88,7 @@ def apply(
     next_done = next_done.reshape(next_done.shape[0], 1, 1)
     parameterized_update = partial(associative_update, params)
 
+    # Fold the previous recurrent state into x (if not start)
     x = jnp.logical_not(start[0:1]) * state * gamma(params, jnp.array([1])) + x
     # This is not executed during inference -- method will just return x if size is 1
     new_state, _, _ = jax.lax.associative_scan(

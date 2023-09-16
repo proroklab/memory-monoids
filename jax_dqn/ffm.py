@@ -68,7 +68,7 @@ class FFM(eqx.Module):
     ) -> Tuple[jax.Array, jax.Array]:
         #gate_in = vmap(self.gate_in)(x)
         pre = vmap(self.pre)(x)
-        pre = pre / jnp.linalg.norm(pre, axis=-1, keepdims=True)
+        pre = pre / (1e-6 + jnp.linalg.norm(pre, axis=-1, keepdims=True))
         #gated_x = pre / jnp.linalg.norm(pre, axis=-1, keepdims=True) * gate_in
         #pre = vmap(jax.nn.relu)(vmap(self.pre)(x))
         #gated_x = gated_x / jnp.linalg.norm(gated_x, axis=-1, keepdims=True)

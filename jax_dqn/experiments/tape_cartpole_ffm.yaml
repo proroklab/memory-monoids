@@ -3,7 +3,6 @@ seed: 0
 collect:
   env: "popgym.envs.PositionOnlyCartPoleEasy"
   popgym_env: True
-  steps_per_epoch: 40
   epochs: 10_000
   random_epochs: 10_000
   eps_start: 0.1
@@ -11,7 +10,7 @@ collect:
   propagate_state: True
 
 train:
-  batch_size: 5120 #10240
+  batch_size: 2560 #10240
   gamma: 0.99
   target_delay: 150 # In epochs/updates
   lr: 0.0002
@@ -27,10 +26,10 @@ model:
 
 eval:
   interval: 10
+  episodes: 20
   collect:
     env: "popgym.envs.PositionOnlyCartPoleEasy"
     popgym_env: True
-    steps_per_epoch: 1_000
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

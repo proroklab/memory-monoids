@@ -4,31 +4,30 @@ from jax import vmap, jit, random
 import jax
 import numpy as np
 from jax import random, vmap, nn
+import time
 import tracemalloc
 
 # from cpprb import ReplayBuffer
-from buffer import ReplayBuffer
+from buffer import TapeBuffer
+from collector.tape_collector import TapeCollector
 
 # import flax
 # from flax import linen as nn
 import equinox as eqx
-from modules import mean_noise
-from modules import greedy_policy
-from modules import hard_update, soft_update
-from segment_collector import BatchedSegmentCollector
+from modules import greedy_policy, hard_update, soft_update, RecurrentQNetwork
 import optax
 import tqdm
 import argparse
 import yaml
 
 from modules import epsilon_greedy_policy, anneal, boltzmann_policy
-from linear_transformer import LTQNetwork
-from gru import GRUQNetwork
-from ffm_model import FFMQNetwork
+from memory.gru import GRU
+from memory.sffm import SFFM
+from memory.ffm import FFM
 from utils import load_popgym_env
-from losses import segment_dqn_loss, segment_ddqn_loss, segment_mmdqn_loss
+from losses import tape_ddqn_loss
 
-model_map = {GRUQNetwork.name: GRUQNetwork, LTQNetwork.name: LTQNetwork, FFMQNetwork.name: FFMQNetwork}
+model_map = {GRU.name: GRU, SFFM.name: SFFM, FFM.name: FFM}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
@@ -42,7 +41,7 @@ with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 if args.debug:
-    config["collect"]["random_epochs"] = 0
+    config["collect"]["random_epochs"] = 500
     jax.config.update('jax_disable_jit', True)
 
 if args.seed is not None:
@@ -68,45 +67,47 @@ lr_schedule = optax.cosine_decay_schedule(
 opt = optax.adamw(lr_schedule, weight_decay=0.001)
 
 
-rb = ReplayBuffer(
+rb = TapeBuffer(
     config["buffer"]["size"],
+    "start",
     {
         "observation": {
-            "shape": (config["collect"]["segment_length"], obs_shape),
+            "shape": obs_shape,
             "dtype": np.float32,
         },
-        "action": {"shape": config["collect"]["segment_length"], "dtype": np.int32},
-        "next_reward": {"shape": config["collect"]["segment_length"], "dtype": np.float32},
+        "action": {"shape": (), "dtype": np.int32},
+        "next_reward": {"shape": (), "dtype": np.float32},
         "next_observation": {
-            "shape": (config["collect"]["segment_length"], obs_shape),
+            "shape": obs_shape,
             "dtype": np.float32,
         },
-        "start": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        #"next_start": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        #"done": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "next_terminated": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "next_truncated": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "mask": {"shape": config["collect"]["segment_length"], "dtype": bool},
-        "episode_id": {"shape": config["collect"]["segment_length"], "dtype": np.int64},
+        "start": {"shape": (), "dtype": bool},
+        "next_terminated": {"shape": (), "dtype": bool},
+        "next_truncated": {"shape": (), "dtype": bool},
+        "next_done": {"shape": (), "dtype": bool},
+        "episode_id": {"shape": (), "dtype": np.int64},
     },
-    config["buffer"]["contiguous"]
 )
 
 
-key, model_key = random.split(key)
-model_class = model_map[config["model"]["name"]]
-q_network = model_class(obs_shape, act_shape, config["model"], model_key)
-q_target = model_class(obs_shape, act_shape, config["model"], model_key)
+key, model_key, memory_key = random.split(key, 3)
+memory_class = model_map[config["model"]["memory_name"]]
+memory_network = memory_class(**config["model"]["memory"], key=memory_key)
+memory_target = memory_class(**config["model"]["memory"], key=memory_key)
+q_network = RecurrentQNetwork(obs_shape, act_shape, memory_network, config["model"], model_key)
+q_target = RecurrentQNetwork(obs_shape, act_shape, memory_target, config["model"], model_key)
 opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
 epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
 best_eval_ep_reward = best_ep_reward = eval_ep_reward = ep_reward = -np.inf
-collector = BatchedSegmentCollector(env, config)
-eval_collector = BatchedSegmentCollector(eval_env, config["eval"])
+collector = TapeCollector(env, config)
+eval_collector = TapeCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
 
+total_train_time = 0
 for epoch in range(1, epochs + 1):
+    train_start = time.time()
     pbar.update()
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
@@ -120,16 +121,19 @@ for epoch in range(1, epochs + 1):
 
     rb.add(**transitions)
     rb.on_episode_end()
-    transitions_collected += transitions['mask'].sum()
+    transitions_collected += len(transitions['next_reward'])
 
     if epoch <= config["collect"]["random_epochs"]:
         continue
-    
+
     data = rb.sample(config["train"]["batch_size"], sample_key)
 
-    transitions_trained += data["mask"].sum()
+    transitions_trained += len(transitions['next_reward'])
 
-    outputs, gradient = segment_ddqn_loss(
+    # Triggers recompiles
+    # One memory leak comes after here
+    # Because the batch size is variable, so q functions must be recompiled
+    outputs, gradient = tape_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )
     loss, (q_mean, target_mean, target_network_mean) = outputs
@@ -137,26 +141,22 @@ for epoch in range(1, epochs + 1):
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    # if epoch % config["train"]["target_delay"] == 0:
-    #     q_target = hard_update(q_network, q_target)
     q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
+    train_elapsed = time.time() - train_start
+    total_train_time += train_elapsed
     # Eval
     if epoch % config["eval"]["interval"] == 0:
         eval_keys = random.split(eval_key, config["eval"]["episodes"])
         eval_rewards = []
         for i in range(config["eval"]["episodes"]):
             _, eval_ep_reward, _ = eval_collector(
-                eqx.tree_inference(q_network, True), greedy_policy, 1.0, eval_keys[i], True
+                q_network, greedy_policy, 1.0, eval_keys[i], True
             )
             eval_rewards.append(eval_ep_reward)
         eval_ep_reward = np.mean(eval_rewards)
         if eval_ep_reward > best_eval_ep_reward:
             best_eval_ep_reward = eval_ep_reward
-
-    # if epoch % 200:
-    #     q_network.__call__.clear_caches()
-    #     q_target.__call__.clear_caches()
 
     to_log = {
         "collect/epoch": epoch,
@@ -178,7 +178,8 @@ for epoch in range(1, epochs + 1):
         "train/target_network_mean": target_network_mean,
         "train/transitions": transitions_trained,
         "train/grad_global_norm": optax.global_norm(gradient),
-        #"train/mean_noise": mean_noise(q_network),
+        "train/time_this_epoch": train_elapsed,
+        "train/time_total": total_train_time,
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:

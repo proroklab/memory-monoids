@@ -10,19 +10,23 @@ collect:
   propagate_state: True
 
 train:
-  batch_size: 2560 #10240
+  batch_size: 5120 #10240
   gamma: 0.99
   target_delay: 150 # In epochs/updates
   lr: 0.0002
 
 buffer:
   size: 800_000 # In timesteps 
-  contiguous: True
 
 model:
-  name: "FFM"
   mlp_size: 64
   recurrent_size: 128
+  memory_name: "SFFM"
+  memory:
+    input_size: 64
+    trace_size: 32
+    context_size: 4
+    output_size: 128
 
 eval:
   interval: 10

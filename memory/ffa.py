@@ -53,11 +53,12 @@ def associative_update(
     carry: Tuple[jax.Array, jax.Array, jax.Array],
     incoming: Tuple[jax.Array, jax.Array, jax.Array],
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
-    state, i, _ = carry
-    x, j, start = incoming
+    state, i, _, done = carry
+    x, j, start, next_done = incoming
     # VALIDATED: Only need start...
-    state = state * gamma(params,  j - i) * jnp.logical_not(start) + x
-    return state, j, start
+    #state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
+    state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
+    return state, j, start, next_done
 
 
 def apply_one_ep(params, x, state, done):
@@ -69,18 +70,27 @@ def apply_one_ep(params, x, state, done):
         if done[i]:
             break
         i += 1
-    return jnp.array(xs)
+    return jnp.concatenate(xs)
 
 
+def check_apply(params, new_state, x, state, done):
+    ep1 = apply_one_ep(params, x, jnp.zeros_like(state), done)
+    idx = ep1.shape[0]
+    ep2 = apply_one_ep(params, x[idx:], jnp.zeros_like(state), done[idx:])
+    idx = idx + ep2.shape[0]
+    ep3 = apply_one_ep(params, x[idx:], jnp.zeros_like(state), done[idx:])
+    desired = jax.lax.stop_gradient(jnp.concatenate([ep1, ep2, ep3]))
+    actual = jax.lax.stop_gradient(new_state[:desired.shape[0]])
+    breakpoint()
 
+
+# Verified fine again
 @jax.jit
 def apply(
     params: Tuple[jax.Array, jax.Array], x: jax.Array, state: jax.Array, start: jax.Array, next_done: jax.Array
 ) -> jax.Array:
     # x: [T, memory_size]
     # memory: [1, memory_size, context_size]
-    a, b = params
-
     timestep = jnp.arange(x.shape[0], dtype=jnp.complex64)
     # Add context dim
     x = jnp.expand_dims(x, axis=-1).astype(jnp.complex64)
@@ -89,51 +99,15 @@ def apply(
     parameterized_update = partial(associative_update, params)
 
     # Fold the previous recurrent state into x (if not start)
-    x = jnp.logical_not(start[0:1]) * state * gamma(params, jnp.array([1])) + x
+    x = state * gamma(params, jnp.array([1])) + x
+    #x = jnp.logical_not(next_done[0:1]) * state * gamma(params, jnp.array([1])) + x
     # This is not executed during inference -- method will just return x if size is 1
-    new_state, _, _ = jax.lax.associative_scan(
-        parameterized_update, (x, timestep, start), axis=0
+    new_state, _, _, _ = jax.lax.associative_scan(
+        parameterized_update, (x, timestep, start, next_done), axis=0
     )
+    if x.shape[0] > 1:
+        check_apply(params, new_state, x, state, next_done)
     return new_state
-
-
-    
-
-
-
-#    timestep = jnp.arange(x.shape[0] + 1, dtype=jnp.float32)
-#    timestep = jax.lax.complex(timestep, jnp.zeros_like(timestep))
-#
-#    # [prev_state, x_0, x_1, ...]
-#    x = jnp.repeat(x.reshape(*x.shape, 1), context_size, axis=-1)
-#    original_x = x.copy()
-#    x = jax.lax.complex(x, jnp.zeros_like(x))
-#    x = jnp.concatenate([state, x], axis=0)
-#
-#    # [False, ...]
-#    # Has no effect since we discard the first state anyways
-#    start = jnp.concatenate([jnp.array([False]), start], axis=0)
-#    start = start.reshape(start.shape[0], 1, 1)
-#    next_done = jnp.concatenate([jnp.array([False]), next_done], axis=0)
-#    next_done = next_done.reshape(next_done.shape[0], 1, 1)
-#    
-#    parameterized_update = partial(associative_update, params)
-#    new_state, _, _, _ = jax.lax.associative_scan(
-#        parameterized_update, (x, timestep, start, next_done), axis=0
-#    )
-#    desired_val = (state * gamma(params, jnp.array([1])) + original_x)[0,0,0]
-#    true_val = new_state[1,0,0]
-#    true_val_no_boundary = jax.lax.associative_scan(
-#        parameterized_update, (x, timestep, jnp.zeros_like(start), jnp.zeros_like(next_done)), axis=0
-#    )[0][1,0,0]
-#    # TODO: It seems like we are outputing padding for ours?
-#    # x is not going in at the first timestep
-#    print(desired_val)
-#    print(true_val)
-#    print(true_val_no_boundary)
-#    breakpoint()
-#
-#    return new_state[1:]
 
 
 if __name__ == "__main__":

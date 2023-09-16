@@ -20,10 +20,20 @@ buffer:
   size: 50_000 # In segments
   contiguous: False
 
+#model:
+#  name: "FFM"
+#  mlp_size: 64
+#  recurrent_size: 128
+
 model:
-  name: "FFM"
   mlp_size: 64
   recurrent_size: 128
+  memory_name: "SFFM"
+  memory:
+    input_size: 64
+    trace_size: 32
+    context_size: 4
+    output_size: 128
 
 eval:
   interval: 10

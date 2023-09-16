@@ -21,9 +21,12 @@ buffer:
   contiguous: False
 
 model:
-  name: "GRU"
   mlp_size: 64
   recurrent_size: 128
+  memory_name: "GRU"
+  memory:
+    input_size: 64
+    recurrent_size: 128
 
 eval:
   interval: 10

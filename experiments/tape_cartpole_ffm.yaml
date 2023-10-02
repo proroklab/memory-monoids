@@ -10,7 +10,7 @@ collect:
   propagate_state: True
 
 train:
-  batch_size: 5120 #10240
+  batch_size: 1024 #5120 #10240
   gamma: 0.99
   target_delay: 150 # In epochs/updates
   lr: 0.0002

@@ -53,35 +53,27 @@ def associative_update(
     carry: Tuple[jax.Array, jax.Array, jax.Array],
     incoming: Tuple[jax.Array, jax.Array, jax.Array],
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
-    state, i, _, done = carry
+    state, i, prev_start, done = carry
     x, j, start, next_done = incoming
-    # VALIDATED: Only need start...
-    #state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
-    state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
-    return state, j, start, next_done
+    # # TODO: We need to carry two separate flags, not just done
+    # # VALIDATED: Only need start...
+    # state = jax.lax.select(
+    #     jnp.tile(start, (1, *state.shape[1:])),
+    #     #jnp.zeros_like(state),
+    #     x,
+    #     state * gamma(params, j - i) + x
+    # )
+    state = jnp.logical_not(start) * state * gamma(params, j - i) + x
+    return state, j, jnp.logical_or(start, prev_start), next_done
 
+    # state = state * gamma(params, j - i) * jnp.logical_not(start) + x 
+    # #all_next_done_i = all_next_done[i.real.astype(jnp.int32)]
+    # #all_next_done_j = all_next_done[i.real.astype(jnp.int32)]
+    # #state = state * gamma(params, j - i) * jnp.logical_not(all_next_done_j) + x * jnp.logical_not(all_next_done_i)
+    # #state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
+    # #state = state * gamma(params, j - i) + x * jnp.logical_not(next_done)
+    # return state, j, start, next_done
 
-def apply_one_ep(params, x, state, done):
-    xs = []
-    i = 0
-    for i in range(len(done)):
-        state = state * gamma(params, jnp.array([1])) + x[i:i+1]
-        xs.append(state)
-        if done[i]:
-            break
-        i += 1
-    return jnp.concatenate(xs)
-
-
-def check_apply(params, new_state, x, state, done):
-    ep1 = apply_one_ep(params, x, jnp.zeros_like(state), done)
-    idx = ep1.shape[0]
-    ep2 = apply_one_ep(params, x[idx:], jnp.zeros_like(state), done[idx:])
-    idx = idx + ep2.shape[0]
-    ep3 = apply_one_ep(params, x[idx:], jnp.zeros_like(state), done[idx:])
-    desired = jax.lax.stop_gradient(jnp.concatenate([ep1, ep2, ep3]))
-    actual = jax.lax.stop_gradient(new_state[:desired.shape[0]])
-    breakpoint()
 
 
 # Verified fine again
@@ -91,7 +83,7 @@ def apply(
 ) -> jax.Array:
     # x: [T, memory_size]
     # memory: [1, memory_size, context_size]
-    timestep = jnp.arange(x.shape[0], dtype=jnp.complex64)
+    timestep = jnp.arange(x.shape[0], dtype=jnp.int32)
     # Add context dim
     x = jnp.expand_dims(x, axis=-1).astype(jnp.complex64)
     start = start.reshape(start.shape[0], 1, 1)
@@ -100,13 +92,10 @@ def apply(
 
     # Fold the previous recurrent state into x (if not start)
     x = state * gamma(params, jnp.array([1])) + x
-    #x = jnp.logical_not(next_done[0:1]) * state * gamma(params, jnp.array([1])) + x
     # This is not executed during inference -- method will just return x if size is 1
     new_state, _, _, _ = jax.lax.associative_scan(
         parameterized_update, (x, timestep, start, next_done), axis=0
     )
-    if x.shape[0] > 1:
-        check_apply(params, new_state, x, state, next_done)
     return new_state
 
 

@@ -119,7 +119,7 @@ for epoch in range(1, epochs + 1):
         best_ep_reward
     ) = collector(q_network, epsilon_greedy_policy, jnp.array(progress), epoch_key, False)
 
-    rb.add(**transitions)
+    rb.add(epoch_key, **transitions)
     rb.on_episode_end()
     transitions_collected += len(transitions['next_reward'])
 

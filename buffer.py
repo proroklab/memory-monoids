@@ -141,11 +141,10 @@ class TapeBuffer(ReplayBuffer):
             idxs_a = np.arange(idx_a, idx_b)
             idxs_b = np.arange(idx_b, idx_c)
 
+            src_idx = jnp.concatenate([idxs_a, idxs_b])
+            sink_idx = jnp.concatenate([idxs_b, idxs_a])
             for k in self.data:
-                swapped_data = self.data[k][jnp.concatenate([idxs_b, idxs_a])]
-                # if k == 'start':
-                #     breakpoint()
-                self.data[k][jnp.concatenate([idxs_a, idxs_b])] = swapped_data
+                self.data[k][src_idx] = self.data[k][sink_idx]
             
             assert self.data[self.start_key][idx_a] == True
             assert self.data['next_done'][idx_c - 1] == True

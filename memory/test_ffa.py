@@ -13,19 +13,26 @@ def one_episode_loop(params, x, state, next_done):
             break
     return jnp.concatenate(xs)
 
-def inf_loop(params, x, s, start, next_done):
-        s = ffa.apply(params, x, s, start, next_done)
+def recurrent_loop(params, x, state, start, next_done):
+    xs = []
+    i = 0
+    one = jnp.array([1])
+    for i in range(len(next_done)):
+        state = state * ffa.gamma(params, one) * jnp.logical_not(start[i]) + jnp.expand_dims(x[i:i+1], -1)
+        xs.append(state)
+    return jnp.concatenate(xs)
 
-def check_apply(params, new_state, x, state, done):
-    idx = 0
-    desired = []
-    while True:
-        ep = one_episode_loop(params, x[idx:], jnp.zeros_like(state), done[idx:])
-        idx += ep.shape[0]
-        desired.append(ep)
-        if idx >= x.shape[0]:
-            break
-    desired = jnp.concatenate(desired)
+def check_apply(params, new_state, x, state, start, done):
+    desired = recurrent_loop(params, x, state, start, done)
+    # idx = 0
+    # desired = []
+    # while True:
+    #     ep = one_episode_loop(params, x[idx:], jnp.zeros_like(state), done[idx:])
+    #     idx += ep.shape[0]
+    #     desired.append(ep)
+    #     if idx >= x.shape[0]:
+    #         break
+    # desired = jnp.concatenate(desired)
 
     # ep1 = one_episode_loop(params, x, jnp.zeros_like(state), done)
     # idx = ep1.shape[0]
@@ -39,7 +46,7 @@ def check_apply(params, new_state, x, state, done):
     breakpoint()
 
 if __name__ == '__main__':
-    size = 5000
+    size = 100
     context_size = 1
     memory_size = 1
     params = (jnp.array([-0.1]), jnp.array([jnp.pi / 4]))
@@ -48,8 +55,8 @@ if __name__ == '__main__':
         #params = ffa.init(memory_size=memory_size, context_size=context_size)
         x = jnp.ones((size, memory_size), dtype=jnp.float32)
         s = ffa.initial_state(params)
-        start = jax.random.uniform(key, (size,)) > 0.8
+        start = jax.random.uniform(key, (size,)) > 0.95
         next_done = jnp.concatenate([start[1:], jnp.array([False])])
         #start = jnp.zeros((size,), dtype=bool)
         result = ffa.apply(params, x, s, start, next_done)
-        check_apply(params, result, x, s, next_done)
+        check_apply(params, result, x, s, start, next_done)

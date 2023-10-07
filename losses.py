@@ -5,6 +5,14 @@ import equinox as eqx
 
 
 @jax.jit
+def huber(x):
+    return jax.lax.select(
+        jnp.abs(x) < 1.0,
+        0.5 * x ** 2,
+        jnp.abs(x) - 0.5 
+    )
+
+@jax.jit
 def masked_mean(x, mask):
     return jnp.sum(x * mask) / mask.sum()
 
@@ -60,9 +68,10 @@ def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
     ))
     next_q = next_q[batch_idx, next_q_action_idx.argmax(-1).flatten()]
 
-    target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q
+    target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
     error = selected_q - target
-    loss = jnp.abs(error)
+    #loss = jnp.abs(error)
+    loss = huber(error)
     q_mean = jnp.mean(q_values)
     target_mean = jnp.mean(target)
     target_network_mean = jnp.mean(next_q)

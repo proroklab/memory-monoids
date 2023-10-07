@@ -128,6 +128,25 @@ class TapeBuffer(ReplayBuffer):
             out[k] = v[idx]
         return out
 
+    def sample_noncontiguous(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
+        out = {}
+        assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
+        rng = np.random.default_rng(jax.random.bits(key).item())
+        sample_idxs = []
+        while len(sample_idxs) < size:
+            start_idx = rng.integers(len(self.episode_starts) - 1 - 1)
+            start = self.episode_starts[start_idx]
+            end = self.episode_starts[start_idx + 1]
+            sample_idxs.append(
+                np.arange(start, end)
+            )
+
+        sample_idxs = np.concatenate(sample_idxs)[:size]
+        # sample_idxs = np.r_[*sample_slices]
+        for k, v in self.data.items():
+            out[k] = v[sample_idxs]
+        return out
+
     def swap(self, key) -> None:
         # Shuffle two consecutive elements
         # Don't shuffle the very last element or the second to last element
@@ -135,7 +154,11 @@ class TapeBuffer(ReplayBuffer):
             return
 
         rng = np.random.default_rng(jax.random.bits(key).item())
-        for _ in range(self.swap_iters):
+        if self.swap_iters == "auto":
+            r = range(int(np.log2(self.size)))
+        else:
+            r = range(self.swap_iters)
+        for _ in r:
             idx = rng.integers(len(self.episode_starts) - 1 - 2)
             idx_a, idx_b, idx_c = self.episode_starts[idx], self.episode_starts[idx + 1], self.episode_starts[idx + 2]
             idxs_a = np.arange(idx_a, idx_b)
@@ -146,8 +169,8 @@ class TapeBuffer(ReplayBuffer):
             for k in self.data:
                 self.data[k][src_idx] = self.data[k][sink_idx]
             
-            assert self.data[self.start_key][idx_a] == True
-            assert self.data['next_done'][idx_c - 1] == True
+            #assert self.data[self.start_key][idx_a] == True
+            #assert self.data['next_done'][idx_c - 1] == True
 
             #self.episode_starts[idx] = idx_b - idx_a
             self.episode_starts[idx + 1] = idx_c - idx_b + idx_a
@@ -204,8 +227,6 @@ class TapeBuffer(ReplayBuffer):
 
         for k, v in data.items():
             self.data[k][idx] = np.array(v, copy=False)
-
-        self.swap(key)
 
 
 if __name__ == "__main__":

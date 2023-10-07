@@ -13,10 +13,11 @@ train:
   batch_size: 2048 #10240
   gamma: 0.99
   target_delay: 150 # In epochs/updates
-  lr: 0.0002
+  lr: 0.001
 
 buffer:
   size: 800_000 # In timesteps 
+  swap_iters: auto
 
 model:
   mlp_size: 64

@@ -64,7 +64,11 @@ lr_schedule = optax.cosine_decay_schedule(
     init_value=config["train"]["lr"], 
     decay_steps=config['collect']['epochs'],
 )
-opt = optax.adamw(lr_schedule, weight_decay=0.001)
+#opt = optax.adamw(lr_schedule, weight_decay=0.001)
+opt = optax.chain(
+    optax.clip_by_global_norm(5.0),
+    optax.adamw(lr_schedule, weight_decay=0.001)
+)
 
 
 rb = TapeBuffer(
@@ -87,6 +91,7 @@ rb = TapeBuffer(
         "next_done": {"shape": (), "dtype": bool},
         "episode_id": {"shape": (), "dtype": np.int64},
     },
+    swap_iters=config["buffer"]["swap_iters"],
 )
 
 
@@ -126,7 +131,9 @@ for epoch in range(1, epochs + 1):
     if epoch <= config["collect"]["random_epochs"]:
         continue
 
+    rb.swap(epoch_key)
     data = rb.sample(config["train"]["batch_size"], sample_key)
+    #data = rb.sample_noncontiguous(config["train"]["batch_size"], sample_key)
 
     transitions_trained += len(transitions['next_reward'])
 
@@ -141,17 +148,18 @@ for epoch in range(1, epochs + 1):
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
+    q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
 
     train_elapsed = time.time() - train_start
     total_train_time += train_elapsed
     # Eval
+    q_eval = eqx.tree_inference(q_network, True)
     if epoch % config["eval"]["interval"] == 0:
         eval_keys = random.split(eval_key, config["eval"]["episodes"])
         eval_rewards = []
         for i in range(config["eval"]["episodes"]):
             _, eval_ep_reward, _ = eval_collector(
-                q_network, greedy_policy, 1.0, eval_keys[i], True
+                q_eval, greedy_policy, 1.0, eval_keys[i], True
             )
             eval_rewards.append(eval_ep_reward)
         eval_ep_reward = np.mean(eval_rewards)

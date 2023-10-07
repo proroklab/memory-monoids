@@ -12,6 +12,19 @@ import jax.numpy as jnp
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
 
+# @jax.jit
+# def mish(x, key=None):
+#     #return x * jnp.pi / (jnp.pi + jnp.exp(-x)) 
+#     #return x / (1 + jnp.exp(-x)) 
+#     #return x / (1 + jnp.abs(x))
+#     #return x - jnp.tanh(x)
+#     return jnp.sign(x) * jnp.log(1 + jnp.exp(jnp.abs(x)))
+
+
+class RandomSequential(nn.Sequential):
+    def __call__(self, x, key=None):
+        return super().__call__(x, key=key)
+
 class RecurrentQNetwork(eqx.Module):
     input_size: int
     output_size: int
@@ -28,20 +41,24 @@ class RecurrentQNetwork(eqx.Module):
         self.input_size = obs_shape
         self.output_size = act_shape
         keys = random.split(key, 8)
-        pre = nn.Sequential(
-            [ortho_linear(keys[1], obs_shape, config["mlp_size"]), mish]
+        pre = RandomSequential(
+            [ortho_linear(keys[1], obs_shape, config["mlp_size"]), nn.Dropout(p=0.005), mish]
         )
         self.pre = eqx.filter_vmap(pre)
         self.memory = memory_module
-        post = nn.Sequential(
+        post = RandomSequential(
             [
                 ortho_linear(
                     keys[3], self.config["recurrent_size"], self.config["mlp_size"],
                 ),
+                nn.Dropout(p=0.005),
+                #nn.LayerNorm(None, use_bias=False, use_weight=False,),
                 mish,
                 ortho_linear(
                     keys[4], self.config["mlp_size"], self.config["mlp_size"], 
                 ),
+                nn.Dropout(p=0.005),
+                #nn.LayerNorm(None, use_bias=False, use_weight=False),
                 mish,
             ]
         )
@@ -55,9 +72,11 @@ class RecurrentQNetwork(eqx.Module):
 
     @eqx.filter_jit
     def __call__(self, x, state, start, done, key):
-        x = self.pre(x)
+        T = x.shape[0]
+        net_keys = random.split(key, 2 * T)
+        x = self.pre(x, net_keys[:T])
         y, final_state = self.memory(x=x, state=state, start=start, next_done=done, key=key)
-        y = self.post(y)
+        y = self.post(y, net_keys[T:])
 
         value = self.value(y)
         A = self.advantage(y)

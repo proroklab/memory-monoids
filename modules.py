@@ -1,4 +1,3 @@
-from functools import partial
 import math
 from typing import Any, Callable, Dict
 import jax
@@ -42,7 +41,7 @@ class RecurrentQNetwork(eqx.Module):
         self.output_size = act_shape
         keys = random.split(key, 8)
         pre = RandomSequential(
-            [ortho_linear(keys[1], obs_shape, config["mlp_size"]), nn.Dropout(p=0.005), mish]
+            [ortho_linear(keys[1], obs_shape, config["mlp_size"]), nn.Dropout(p=self.config["dropout"]), mish]
         )
         self.pre = eqx.filter_vmap(pre)
         self.memory = memory_module
@@ -51,13 +50,13 @@ class RecurrentQNetwork(eqx.Module):
                 ortho_linear(
                     keys[3], self.config["recurrent_size"], self.config["mlp_size"],
                 ),
-                nn.Dropout(p=0.005),
+                nn.Dropout(p=self.config["dropout"]),
                 #nn.LayerNorm(None, use_bias=False, use_weight=False,),
                 mish,
                 ortho_linear(
                     keys[4], self.config["mlp_size"], self.config["mlp_size"], 
                 ),
-                nn.Dropout(p=0.005),
+                nn.Dropout(p=self.config["dropout"]),
                 #nn.LayerNorm(None, use_bias=False, use_weight=False),
                 mish,
             ]

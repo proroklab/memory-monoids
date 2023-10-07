@@ -10,18 +10,19 @@ collect:
   propagate_state: True
 
 train:
-  batch_size: 2048 #10240
+  batch_size: 4096 #10240
   gamma: 0.99
   target_delay: 150 # In epochs/updates
-  lr: 0.001
+  lr: 0.0005
 
 buffer:
   size: 800_000 # In timesteps 
-  swap_iters: auto
+  swap_iters: 64 # sqrt(batch_size) auto
 
 model:
   mlp_size: 64
   recurrent_size: 128
+  dropout: 0.01
   memory_name: "SFFM"
   memory:
     input_size: 64

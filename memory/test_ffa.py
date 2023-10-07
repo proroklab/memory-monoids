@@ -46,7 +46,7 @@ def check_apply(params, new_state, x, state, start, done):
     breakpoint()
 
 if __name__ == '__main__':
-    size = 100
+    size = 1000
     context_size = 1
     memory_size = 1
     params = (jnp.array([-0.1]), jnp.array([jnp.pi / 4]))
@@ -55,6 +55,7 @@ if __name__ == '__main__':
         #params = ffa.init(memory_size=memory_size, context_size=context_size)
         x = jnp.ones((size, memory_size), dtype=jnp.float32)
         s = ffa.initial_state(params)
+        #s = (jnp.zeros((memory_size, context_size), dtype=jnp.complex64))
         start = jax.random.uniform(key, (size,)) > 0.95
         next_done = jnp.concatenate([start[1:], jnp.array([False])])
         #start = jnp.zeros((size,), dtype=bool)

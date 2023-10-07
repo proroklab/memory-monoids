@@ -16,8 +16,8 @@ def huber(x):
 def masked_mean(x, mask):
     return jnp.sum(x * mask) / mask.sum()
 
-@eqx.filter_jit
 @partial(eqx.filter_value_and_grad, has_aux=True)
+@eqx.filter_jit
 def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     # Double DQN
     B, T = segment["next_reward"].shape
@@ -42,14 +42,14 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
 
     target = segment["next_reward"] + (1.0 - segment["next_terminated"]) * gamma * next_q
     error = selected_q - target
-    loss = masked_mean(jnp.abs(error), segment['mask'])
+    loss = huber(masked_mean(jnp.abs(error), segment['mask']))
     q_mean = masked_mean(q_values, jnp.expand_dims(segment['mask'], -1))
     target_mean = masked_mean(target, segment['mask'])
     target_network_mean = masked_mean(next_q, segment['mask'])
     return loss, (q_mean, target_mean, target_network_mean)
 
-@eqx.filter_jit
 @partial(eqx.filter_value_and_grad, has_aux=True)
+@eqx.filter_jit
 def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
     B = tape["next_reward"].shape[0]
     batch_idx = jnp.arange(B)
@@ -70,7 +70,6 @@ def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
 
     target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
     error = selected_q - target
-    #loss = jnp.abs(error)
     loss = huber(error)
     q_mean = jnp.mean(q_values)
     target_mean = jnp.mean(target)

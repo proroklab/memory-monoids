@@ -8,7 +8,7 @@ import time
 import tracemalloc
 
 # from cpprb import ReplayBuffer
-from buffer import TapeBuffer
+from buffer import TapeBuffer, ShuffledTapeBuffer
 from collector.tape_collector import TapeCollector
 
 # import flax
@@ -66,12 +66,12 @@ lr_schedule = optax.cosine_decay_schedule(
 )
 #opt = optax.adamw(lr_schedule, weight_decay=0.001)
 opt = optax.chain(
-    optax.clip_by_global_norm(5.0),
+    optax.clip_by_global_norm(4.0),
     optax.adamw(lr_schedule, weight_decay=0.001)
 )
 
 
-rb = TapeBuffer(
+rb = ShuffledTapeBuffer(
     config["buffer"]["size"],
     "start",
     {
@@ -137,9 +137,6 @@ for epoch in range(1, epochs + 1):
 
     transitions_trained += len(transitions['next_reward'])
 
-    # Triggers recompiles
-    # One memory leak comes after here
-    # Because the batch size is variable, so q functions must be recompiled
     outputs, gradient = tape_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )

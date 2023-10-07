@@ -128,25 +128,6 @@ class TapeBuffer(ReplayBuffer):
             out[k] = v[idx]
         return out
 
-    def sample_noncontiguous(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
-        out = {}
-        assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
-        rng = np.random.default_rng(jax.random.bits(key).item())
-        sample_idxs = []
-        while len(sample_idxs) < size:
-            start_idx = rng.integers(len(self.episode_starts) - 1 - 1)
-            start = self.episode_starts[start_idx]
-            end = self.episode_starts[start_idx + 1]
-            sample_idxs.append(
-                np.arange(start, end)
-            )
-
-        sample_idxs = np.concatenate(sample_idxs)[:size]
-        # sample_idxs = np.r_[*sample_slices]
-        for k, v in self.data.items():
-            out[k] = v[sample_idxs]
-        return out
-
     def swap(self, key) -> None:
         # Shuffle two consecutive elements
         # Don't shuffle the very last element or the second to last element
@@ -164,8 +145,8 @@ class TapeBuffer(ReplayBuffer):
             idxs_a = np.arange(idx_a, idx_b)
             idxs_b = np.arange(idx_b, idx_c)
 
-            src_idx = jnp.concatenate([idxs_a, idxs_b])
-            sink_idx = jnp.concatenate([idxs_b, idxs_a])
+            src_idx = np.concatenate([idxs_a, idxs_b])
+            sink_idx = np.concatenate([idxs_b, idxs_a])
             for k in self.data:
                 self.data[k][src_idx] = self.data[k][sink_idx]
             
@@ -190,9 +171,7 @@ class TapeBuffer(ReplayBuffer):
         shuffled_idx = np.repeat(ends - lens.cumsum(), 1) + np.arange(lens.sum())
 
         for k in self.data:
-            #shuffled_data = np.take_along_axis(shuffled_idx, 0, self.data[k][self.episode_starts[:-1]])
             shuffled_data = np.take_along_axis(shuffled_idx, 0, self.data[k][starts_to_shuffle])
-            #data = np.concatenate([shuffled_data, self.data[self.episode_starts[:-1]:]])
             data = np.concatenate([shuffled_data, self.data[starts_to_shuffle[-1]:]])
             self.data[k] = data
         
@@ -227,6 +206,58 @@ class TapeBuffer(ReplayBuffer):
 
         for k, v in data.items():
             self.data[k][idx] = np.array(v, copy=False)
+
+class ShuffledTapeBuffer(TapeBuffer):
+    def __init__(
+        self,
+        buffer_size: int,
+        start_key: str,
+        schema: Dict[str, np.shape],
+        seek_to_start=True,
+        #shuffle_interval=200,
+        swap_iters=1,
+    ):
+        super().__init__(buffer_size, start_key, schema, seek_to_start, swap_iters=0)
+
+    def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
+        out = {k: [] for k in self.data}
+        assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
+        rng = np.random.default_rng(jax.random.bits(key).item())
+        count = 0
+        #while len(sample_idxs) < size:
+        while count < size:
+            start_idx = rng.integers(len(self.episode_starts) - 1 - 1)
+            start = self.episode_starts[start_idx]
+            end = self.episode_starts[start_idx + 1]
+            count += end - start
+            for k, v in self.data.items():
+                out[k].append(v[start:end])
+        return {k: np.concatenate(v)[:size] for k, v in out.items()}
+
+    # def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
+    #     out = {k: [] for k in self.data}
+    #     assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
+    #     rng = np.random.default_rng(jax.random.bits(key).item())
+    #     sample_idxs = []
+    #     count = 0
+    #     #while len(sample_idxs) < size:
+    #     while count < size:
+    #         start_idx = rng.integers(len(self.episode_starts) - 1 - 1)
+    #         start = self.episode_starts[start_idx]
+    #         end = self.episode_starts[start_idx + 1]
+    #         count += end - start
+    #         for k, v in self.data.items():
+    #             out[k].append(v[start:end])
+    #     return {k: np.concatenate(v)[:size] for k, v in out.items()}
+
+        #     sample_idxs.append(
+        #         np.arange(start, end)
+        #     )
+
+        # sample_idxs = np.concatenate(sample_idxs)[:size]
+        # for k, v in self.data.items():
+        #     out[k] = v[sample_idxs]
+        # return out
 
 
 if __name__ == "__main__":

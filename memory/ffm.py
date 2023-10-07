@@ -62,7 +62,8 @@ class FFM(eqx.Module):
         gate_in = vmap(self.gate_in)(x)
         pre = vmap(self.pre)(x)
         gated_x = pre * gate_in
-        state = partial(ffa.apply, self.ffa_params)(gated_x, state, start, next_done)
+        #state = partial(ffa.apply, self.ffa_params)(gated_x, state, start, next_done)
+        state = ffa.apply(self.ffa_params, gated_x, state, start, next_done)
         z_in = jnp.concatenate([jnp.real(state), jnp.imag(state)], axis=-1).reshape(
             state.shape[0], -1
         )

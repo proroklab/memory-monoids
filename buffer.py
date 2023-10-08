@@ -27,6 +27,9 @@ class ReplayBuffer:
     def __len__(self):
         return self.size
 
+    def zeros(self, size: int) -> Dict[str, np.ndarray]:
+        return {k: np.zeros_like(v[:size]) for k, v in self.data.items()}
+
     def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
         out = {}
         rng = np.random.default_rng(jax.random.bits(key).item())

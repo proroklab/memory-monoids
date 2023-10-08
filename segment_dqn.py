@@ -57,7 +57,10 @@ lr_schedule = optax.cosine_decay_schedule(
     init_value=config["train"]["lr"], 
     decay_steps=config['collect']['epochs'],
 )
-opt = optax.adamw(lr_schedule, weight_decay=0.001)
+opt = optax.chain(
+    optax.clip_by_global_norm(4.0),
+    optax.adamw(lr_schedule, weight_decay=0.001)
+)
 
 
 rb = ReplayBuffer(

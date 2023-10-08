@@ -64,7 +64,6 @@ lr_schedule = optax.cosine_decay_schedule(
     init_value=config["train"]["lr"], 
     decay_steps=config['collect']['epochs'],
 )
-#opt = optax.adamw(lr_schedule, weight_decay=0.001)
 opt = optax.chain(
     optax.clip_by_global_norm(4.0),
     optax.adamw(lr_schedule, weight_decay=0.001)
@@ -109,6 +108,13 @@ collector = TapeCollector(env, config)
 eval_collector = TapeCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
+
+# Precompile models
+# print("Precompiling models, this may take some time...")
+# dummy_data = rb.zeros(config["train"]["batch_size"])
+# outputs, gradient = tape_ddqn_loss(
+#     q_network, q_target, dummy_data, config["train"]["gamma"], jax.random.PRNGKey(0)
+# )
 
 total_train_time = 0
 for epoch in range(1, epochs + 1):

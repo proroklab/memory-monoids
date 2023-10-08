@@ -15,8 +15,9 @@ class ReplayBuffer:
         self.dtypes: Dict[str, np.dtype] = {}
         self.ptr = 0
         self.size = 0
+        self.transitions_added = 0
         self.max_size = buffer_size
-        self.padding_size = 0
+        self.unpadded_size = 0
         self.contiguous = contiguous
         for k, v in schema.items():
             shape = v["shape"]
@@ -62,13 +63,15 @@ class ReplayBuffer:
         return data, batch_size
 
     def add(self, **data) -> None:
-        if 'mask' in data:
-            self.padding_size += data['mask'].sum()
-            self.density = (self.size - self.padding_size) / max(1, self.size)
         data, batch_size = self.validate_inputs(data)
         idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
         self.ptr = (self.ptr + batch_size) % self.max_size
         self.size = min(self.size + batch_size, self.max_size)
+        self.transitions_added += batch_size
+
+        if 'mask' in data:
+            self.unpadded_size += data['mask'].sum()
+            self.density = self.unpadded_size / max(1, self.transitions_added)
 
         for k in self.data:
             assert k in data

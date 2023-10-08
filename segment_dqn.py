@@ -60,7 +60,7 @@ lr_schedule = optax.cosine_decay_schedule(
     decay_steps=config['collect']['epochs'],
 )
 opt = optax.chain(
-    optax.clip_by_global_norm(4.0),
+    optax.clip_by_global_norm(config["train"]["gclip"]),
     optax.adamw(lr_schedule, weight_decay=0.001)
 )
 
@@ -185,6 +185,7 @@ for epoch in range(1, epochs + 1):
         "train/grad_global_norm": optax.global_norm(gradient),
         "train/time_this_epoch": train_elapsed,
         "train/time_total": total_train_time,
+        #"train/mean_noise": mean_noise(q_network),
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:

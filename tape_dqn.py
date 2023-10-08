@@ -20,7 +20,7 @@ import tqdm
 import argparse
 import yaml
 
-from modules import epsilon_greedy_policy, anneal, boltzmann_policy
+from modules import epsilon_greedy_policy, anneal, boltzmann_policy, mean_noise
 from memory.gru import GRU
 from memory.sffm import SFFM
 from memory.ffm import FFM
@@ -66,7 +66,7 @@ lr_schedule = optax.cosine_decay_schedule(
     decay_steps=config['collect']['epochs'],
 )
 opt = optax.chain(
-    optax.clip_by_global_norm(4.0),
+    optax.clip_by_global_norm(config["train"]["gclip"]),
     optax.adamw(lr_schedule, weight_decay=0.001)
 )
 
@@ -151,7 +151,7 @@ for epoch in range(1, epochs + 1):
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
+    q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
     train_elapsed = time.time() - train_start
     total_train_time += train_elapsed

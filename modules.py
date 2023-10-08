@@ -7,6 +7,18 @@ from jax import random
 import jax.numpy as jnp
 
 
+def symlog(x, key=None):
+    return jnp.sign(x) * jnp.log(1 + jnp.abs(x))
+
+def linsymlog(x, key=None):
+    return jnp.sign(x) * (1 + jnp.abs(x)) + jnp.tanh(x)
+
+def softsymlog(x, key=None):
+    return jnp.tanh(x) * (1 + jnp.log(1 + jnp.abs(x)))
+
+def leakytanh(x, key=None):
+    return jnp.tanh(x) + 0.1 * x
+
 @jax.jit
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
@@ -24,13 +36,27 @@ class RandomSequential(nn.Sequential):
     def __call__(self, x, key=None):
         return super().__call__(x, key=key)
 
+class Block(eqx.Module):
+    net: eqx.Module
+    def __init__(self, input_size, output_size, key):
+        self.net = RandomSequential([
+            ortho_linear(key, input_size, output_size), 
+            #nn.LayerNorm(None, use_bias=False, use_weight=False,),
+            mish,
+        ])
+
+    def __call__(self, x, key=None):
+        return self.net(x, key=key)
+
+
 class RecurrentQNetwork(eqx.Module):
     input_size: int
     output_size: int
     config: Dict[str, Any]
     pre: eqx.Module
     memory: eqx.Module
-    post: eqx.Module
+    post0: eqx.Module
+    post1: eqx.Module
     value: eqx.Module
     advantage: eqx.Module
     scale: eqx.Module
@@ -39,43 +65,27 @@ class RecurrentQNetwork(eqx.Module):
         self.config = config
         self.input_size = obs_shape
         self.output_size = act_shape
-        keys = random.split(key, 8)
-        pre = RandomSequential(
-            [ortho_linear(keys[1], obs_shape, config["mlp_size"]), nn.Dropout(p=self.config["dropout"]), mish]
-        )
-        self.pre = eqx.filter_vmap(pre)
+        keys = random.split(key, 7)
+        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], keys[1]))
         self.memory = memory_module
-        post = RandomSequential(
-            [
-                ortho_linear(
-                    keys[3], self.config["recurrent_size"], self.config["mlp_size"],
-                ),
-                nn.Dropout(p=self.config["dropout"]),
-                #nn.LayerNorm(None, use_bias=False, use_weight=False,),
-                mish,
-                ortho_linear(
-                    keys[4], self.config["mlp_size"], self.config["mlp_size"], 
-                ),
-                nn.Dropout(p=self.config["dropout"]),
-                #nn.LayerNorm(None, use_bias=False, use_weight=False),
-                mish,
-            ]
-        )
-        self.post = eqx.filter_vmap(post)
-        value = final_linear(keys[5], self.config["mlp_size"], 1, scale=0.01)
+        self.post0 = eqx.filter_vmap(Block(config["recurrent_size"], config["mlp_size"], keys[2]))
+        self.post1 = eqx.filter_vmap(Block(config["mlp_size"], config["mlp_size"], keys[3]))
+
+        value = final_linear(keys[4], self.config["mlp_size"], 1, scale=0.01)
         self.value = eqx.filter_vmap(value)
-        advantage = ortho_linear(keys[6], self.config["mlp_size"], self.output_size)
+        advantage = ortho_linear(keys[5], self.config["mlp_size"], self.output_size)
         self.advantage = eqx.filter_vmap(advantage)
-        scale = final_linear(keys[7], self.config["mlp_size"], 1, scale=0.01)
+        scale = final_linear(keys[6], self.config["mlp_size"], 1, scale=0.01)
         self.scale = eqx.filter_vmap(scale)
 
     @eqx.filter_jit
     def __call__(self, x, state, start, done, key):
         T = x.shape[0]
-        net_keys = random.split(key, 2 * T)
+        net_keys = random.split(key, 3 * T)
         x = self.pre(x, net_keys[:T])
         y, final_state = self.memory(x=x, state=state, start=start, next_done=done, key=key)
-        y = self.post(y, net_keys[T:])
+        y = self.post0(y, net_keys[T:2*T])
+        y = self.post1(y, net_keys[2*T:])
 
         value = self.value(y)
         A = self.advantage(y)
@@ -131,12 +141,14 @@ class NoisyLinear(eqx.nn.Linear):
     sigma_weight: jax.Array
     sigma_bias: jax.Array
     inference: bool
+    normalize: bool
 
-    def __init__(self, input_size, output_size, init_std=0.017, *, key, inference=False):
+    def __init__(self, input_size, output_size, init_std=0.017, normalize=False, *, key, inference=False):
         super().__init__(input_size, output_size, key=key)
         self.sigma_bias = jnp.ones(self.bias.shape) * init_std 
         self.sigma_weight = jnp.ones(self.weight.shape) * init_std 
         self.inference = inference
+        self.normalize = normalize
 
     def get_noise(self):
         return self.sigma_weight
@@ -146,9 +158,22 @@ class NoisyLinear(eqx.nn.Linear):
             weight = self.weight
             bias = self.bias
         else:
+            # _, bkey, wkey = random.split(key, 3)
+            # weight = self.weight + self.sigma_weight * random.normal(wkey, self.weight.shape)
+            # bias = self.bias + self.sigma_bias * random.normal(bkey, self.bias.shape)
             _, bkey, wkey = random.split(key, 3)
-            weight = self.weight + self.sigma_weight * random.normal(wkey, self.weight.shape)
-            bias = self.bias + self.sigma_bias * random.normal(bkey, self.bias.shape)
+            bnoise = random.normal(bkey, self.bias.shape)
+            wnoise = jnp.outer(bnoise, random.normal(wkey, self.weight.shape[1:]))
+            wnoise = jnp.sign(wnoise) * jnp.sqrt(jnp.abs(wnoise))
+            if self.normalize:
+                sigma_bias = self.sigma_bias / (1e-6 + jnp.linalg.norm(self.sigma_bias, keepdims=True))
+                sigma_weight = self.sigma_weight / (1e-6 + jnp.linalg.norm(self.sigma_weight, keepdims=True))
+            else:
+                sigma_bias = self.sigma_bias
+                sigma_weight = self.sigma_weight
+
+            bias = self.bias + sigma_bias * bnoise
+            weight = self.weight + sigma_weight * wnoise
 
         return weight @ x + bias
 

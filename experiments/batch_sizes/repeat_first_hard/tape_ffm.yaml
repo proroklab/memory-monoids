@@ -1,0 +1,42 @@
+seed: 0
+
+collect:
+  env: "popgym.envs.RepeatFirstHard"
+  popgym_env: True
+  epochs: 2_000
+  random_epochs: 2_000
+  eps_start: 0.1
+  eps_end: 0.01
+  propagate_state: True
+
+train:
+  batch_size: 8192 #10240
+  gamma: 0.99
+  target_delay: 150 # In epochs/updates
+  lr: 0.0005
+
+buffer:
+  size: 800_000 # In timesteps 
+  swap_iters: 64 # sqrt(batch_size) auto
+
+model:
+  mlp_size: 64
+  recurrent_size: 128
+  dropout: 0.0
+  memory_name: "SFFM"
+  memory:
+    input_size: 64
+    trace_size: 32
+    context_size: 4
+    output_size: 128
+
+eval:
+  interval: 10
+  episodes: 20
+  collect:
+    env: "popgym.envs.PositionOnlyCartPoleEasy"
+    popgym_env: True
+    random_epochs: 0
+    eps_start: 0.0
+    eps_end: 0.00
+    propagate_state: True

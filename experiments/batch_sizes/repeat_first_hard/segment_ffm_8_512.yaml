@@ -1,7 +1,7 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.PositionOnlyCartPoleEasy"
+  env: "popgym.envs.RepeatFirstHard"
   popgym_env: True
   segment_length: 8
   epochs: 10_000

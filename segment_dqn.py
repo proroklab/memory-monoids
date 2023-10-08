@@ -28,6 +28,7 @@ a.add_argument("--seed", "-s", type=int, default=None)
 a.add_argument("--debug", "-d", action="store_true")
 a.add_argument("--wandb", "-w", action="store_true")
 a.add_argument('--name', '-n', type=str, default=None)
+a.add_argument('--project', '-p', type=str, default="jax_dqn")
 args = a.parse_args()
 
 with open(args.config) as f:
@@ -44,7 +45,7 @@ config["eval"]["seed"] = config["seed"] + 1000
 if args.wandb:
     import wandb
 
-    wandb.init(project="jax_segment_dqn", name=args.name, config=config)
+    wandb.init(project=args.project, name=args.name, config=config)
 
 env = load_popgym_env(config)
 eval_env = load_popgym_env(config, eval=True)

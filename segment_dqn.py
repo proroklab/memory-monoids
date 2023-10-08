@@ -1,4 +1,5 @@
 from functools import partial
+import time
 from jax import numpy as jnp
 from jax import vmap, jit, random
 import jax
@@ -104,7 +105,9 @@ eval_collector = BatchedSegmentCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
 
+total_train_time = 0
 for epoch in range(1, epochs + 1):
+    train_start = time.time()
     pbar.update()
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
@@ -137,15 +140,19 @@ for epoch in range(1, epochs + 1):
     q_network = eqx.apply_updates(q_network, updates)
     # if epoch % config["train"]["target_delay"] == 0:
     #     q_target = hard_update(q_network, q_target)
-    q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
+    q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
+
+    train_elapsed = time.time() - train_start
+    total_train_time += train_elapsed
 
     # Eval
+    q_eval = eqx.tree_inference(q_network, True)
     if epoch % config["eval"]["interval"] == 0:
         eval_keys = random.split(eval_key, config["eval"]["episodes"])
         eval_rewards = []
         for i in range(config["eval"]["episodes"]):
             _, eval_ep_reward, _ = eval_collector(
-                eqx.tree_inference(q_network, True), greedy_policy, 1.0, eval_keys[i], True
+                q_eval, greedy_policy, 1.0, eval_keys[i], True
             )
             eval_rewards.append(eval_ep_reward)
         eval_ep_reward = np.mean(eval_rewards)
@@ -176,7 +183,8 @@ for epoch in range(1, epochs + 1):
         "train/target_network_mean": target_network_mean,
         "train/transitions": transitions_trained,
         "train/grad_global_norm": optax.global_norm(gradient),
-        #"train/mean_noise": mean_noise(q_network),
+        "train/time_this_epoch": train_elapsed,
+        "train/time_total": total_train_time,
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:

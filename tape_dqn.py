@@ -140,10 +140,16 @@ for epoch in range(1, epochs + 1):
 
     rb.swap(epoch_key)
     data = rb.sample(config["train"]["batch_size"], sample_key)
-    #data = rb.sample_noncontiguous(config["train"]["batch_size"], sample_key)
 
     transitions_trained += len(transitions['next_reward'])
 
+    
+    z = jax.xla_computation(eqx.filter_closure_convert(tape_ddqn_loss, 
+        q_network, q_target, data, config["train"]["gamma"], loss_key
+    ))
+    with open("debug.txt", "w") as f:
+        breakpoint()
+        f.write(z.as_hlo_text())
     outputs, gradient = tape_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )

@@ -25,7 +25,7 @@ model:
   mlp_size: 64
   recurrent_size: 128
   dropout: 0.01
-  memory_name: "FFM"
+  memory_name: "SFFM"
   memory:
     input_size: 64
     trace_size: 32

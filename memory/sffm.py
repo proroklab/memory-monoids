@@ -5,7 +5,7 @@ import equinox as eqx
 from equinox import nn
 
 import memory.ffa as ffa
-from modules import linsymlog, softsymlog
+from modules import complex_symlog, linsymlog, mish, softsymlog, symlog
 
 
 class SFFM(eqx.Module):
@@ -19,8 +19,9 @@ class SFFM(eqx.Module):
     pre: nn.Linear
     skip: nn.Linear
     mix: nn.Linear
+    mag: nn.Linear
+    phase: nn.Linear
     ln: nn.LayerNorm
-    linsymlog: callable
 
     def __init__(
         self,
@@ -35,13 +36,14 @@ class SFFM(eqx.Module):
         self.trace_size = trace_size
         self.context_size = context_size
 
-        _, k1, k2, k3 = jax.random.split(key, 4)
+        _, k1, k2, k3, k4 = jax.random.split(key, 5)
         self.pre = eqx.filter_vmap(nn.Linear(input_size, trace_size, key=k1))
         self.skip = eqx.filter_vmap(nn.Linear(input_size, self.output_size, key=k2))
         self.ffa_params = ffa.init(trace_size, context_size)
-        self.mix = eqx.filter_vmap(nn.Linear(2 * trace_size * context_size, self.output_size, key=k3))
+        self.mix = eqx.filter_vmap(nn.Linear(trace_size * context_size, self.output_size, key=k3))
+        self.mag = eqx.filter_vmap(nn.Linear(trace_size * context_size, self.output_size, key=k3))
+        self.phase = eqx.filter_vmap(nn.Linear(trace_size * context_size, self.output_size, key=k4))
         self.ln = eqx.filter_vmap(nn.LayerNorm(None, use_weight=False, use_bias=False))
-        self.linsymlog = jax.vmap(linsymlog)
 
     @eqx.filter_jit
     def initial_state(self, shape=tuple()):
@@ -53,18 +55,19 @@ class SFFM(eqx.Module):
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
         pre = self.pre(x)
-        #pre = jax.nn.softmax(pre, axis=-1)
-        #pre = 1 / (1 + jnp.exp(-self.pre(x)))
-        #pre = self.linsymlog(pre)
-        #pre = pre / (1e-6 + jnp.linalg.norm(pre, axis=-1, keepdims=True))
-        # Compilations slowdown is in ffa.apply
+        pre = pre / (1e-6 + jnp.linalg.norm(pre, axis=-1, keepdims=True))
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
-        #state = jnp.ones((x.shape[0], 32, 4), dtype=jnp.complex64)
-        z_in = jnp.concatenate([jnp.real(state), jnp.imag(state)], axis=-1).reshape(
-            state.shape[0], -1
-        )
-        z = softsymlog(self.mix(z_in))
-        #z = z / (1e-6 + jnp.linalg.norm(z, axis=-1, keepdims=True))
+        s = state.reshape(state.shape[0], -1)
+        mag = mish(self.mag(symlog(jnp.abs(s))))
+        phase = mish(self.phase(jnp.angle(s)))
+        z = self.mix(mag * phase)
+        
+        #z_in = complex_symlog(state)
+        # z_in = jnp.concatenate([jnp.real(z_in), jnp.imag(z_in)], axis=-1).reshape(
+        #     state.shape[0], -1
+        # )
+        # #z = self.mix(z_in / (1e-6 + jnp.linalg.norm(z_in, axis=-1, keepdims=True)))
+        # z = self.mix(z_in)
         skip = self.skip(x)
         final_state = state[-1:]
         return z + skip, final_state

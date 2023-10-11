@@ -18,7 +18,7 @@ import yaml
 from modules import epsilon_greedy_policy, anneal, RecurrentQNetwork, hard_update, soft_update, greedy_policy
 from memory.gru import GRU
 from memory.sffm import SFFM
-from utils import load_popgym_env
+from utils import load_popgym_env, scale_by_norm
 from losses import segment_ddqn_loss
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM}
@@ -60,8 +60,9 @@ lr_schedule = optax.cosine_decay_schedule(
     decay_steps=config['collect']['epochs'],
 )
 opt = optax.chain(
-    optax.clip_by_global_norm(config["train"]["gclip"]),
-    optax.adamw(lr_schedule, weight_decay=0.001)
+    scale_by_norm(scale=1.0),
+    optax.clip(config["train"]["gclip"]),
+    optax.adamw(lr_schedule, weight_decay=0.001),
 )
 
 
@@ -134,7 +135,7 @@ for epoch in range(1, epochs + 1):
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )
     loss, (q_mean, target_mean, target_network_mean) = outputs
-    updates, opt_state = opt.update(
+    updates, opt_state = jax.jit(opt.update)(
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)

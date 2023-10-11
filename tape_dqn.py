@@ -24,7 +24,7 @@ from modules import epsilon_greedy_policy, anneal, boltzmann_policy, mean_noise
 from memory.gru import GRU
 from memory.sffm import SFFM
 from memory.ffm import FFM
-from utils import load_popgym_env
+from utils import load_popgym_env, scale_by_norm
 from losses import tape_ddqn_loss
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, FFM.name: FFM}
@@ -61,13 +61,20 @@ act_shape = env.action_space.n
 
 key = random.PRNGKey(config["seed"])
 eval_key = random.PRNGKey(config["eval"]["seed"])
-lr_schedule = optax.cosine_decay_schedule(
-    init_value=config["train"]["lr"], 
+# lr_schedule = optax.cosine_decay_schedule(
+#     init_value=config["train"]["lr"], 
+#     decay_steps=config['collect']['epochs'],
+# )
+lr_schedule = optax.warmup_cosine_decay_schedule(
+    init_value=0,
+    peak_value=config["train"]["lr"], 
+    warmup_steps=config["train"]["warmup_epochs"],
     decay_steps=config['collect']['epochs'],
 )
+
 opt = optax.chain(
-    optax.clip_by_global_norm(config["train"]["gclip"]),
-    optax.adamw(lr_schedule, weight_decay=0.001)
+    optax.clip_by_global_norm(config["train"]["gradient_clip_ratio"]),
+    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"], b1=config["train"]["beta1"]),
 )
 
 
@@ -146,12 +153,14 @@ for epoch in range(1, epochs + 1):
     outputs, gradient = tape_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )
-    loss, (q_mean, target_mean, target_network_mean) = outputs
-    updates, opt_state = opt.update(
+    loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
+    updates, opt_state = jax.jit(opt.update)(
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
+    q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
+    # if epoch % config["train"]["target_delay"] == 0:
+    #     q_target = eqx.tree_inference(hard_update(q_network, q_target), True)
 
     train_elapsed = time.time() - train_start
     total_train_time += train_elapsed
@@ -191,6 +200,8 @@ for epoch in range(1, epochs + 1):
         "train/grad_global_norm": optax.global_norm(gradient),
         "train/time_this_epoch": train_elapsed,
         "train/time_total": total_train_time,
+        "train/error_min": error_min,
+        "train/error_max": error_max
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:

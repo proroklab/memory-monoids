@@ -3,6 +3,8 @@ import jax
 from jax import numpy as jnp
 import equinox as eqx
 
+from modules import softsymlog
+
 
 @jax.jit
 def huber(x):
@@ -48,6 +50,11 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     target_network_mean = masked_mean(next_q, segment['mask'])
     return loss, (q_mean, target_mean, target_network_mean)
 
+
+@jax.jit
+def tempered_softmax(x, temp=10, key=None):
+    return jax.nn.softmax(x * temp)
+
 @partial(eqx.filter_value_and_grad, has_aux=True)
 @eqx.filter_jit
 def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
@@ -66,12 +73,15 @@ def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
     next_q, _ = jax.lax.stop_gradient(q_target(
         tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
     ))
-    next_q = next_q[batch_idx, next_q_action_idx.argmax(-1).flatten()]
+    next_q = next_q[batch_idx, next_q_action_idx.argmax(-1).flatten()] 
 
     target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
     error = selected_q - target
+    # Clip large positive errors
+    error = jnp.clip(error, a_max=2 * error.std())
+    error_min, error_max = jnp.min(error), jnp.max(error)
     loss = huber(error)
     q_mean = jnp.mean(q_values)
     target_mean = jnp.mean(target)
     target_network_mean = jnp.mean(next_q)
-    return loss.mean(), (q_mean, target_mean, target_network_mean)
+    return loss.mean(), (q_mean, target_mean, target_network_mean, error_min, error_max)

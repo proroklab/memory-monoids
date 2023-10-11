@@ -13,7 +13,7 @@ train:
   batch_size: 8192 #10240
   gamma: 0.99
   target_delay: 150 # In epochs/updates
-  lr: 0.0005
+  lr: 0.0001
 
 buffer:
   size: 800_000 # In timesteps 

@@ -12,10 +12,10 @@ collect:
 
 train:
   batch_size: 64
-  gamma: 0.99
-  target_delay: 150 # In epochs/updates
-  lr: 0.0005
-  gclip: 0.01
+  gamma: 0.95
+  target_delay: 50 # In epochs/updates
+  lr: 0.00005
+  gclip: 0.00005
 
 buffer:
   size: 50_000 # In segments
@@ -24,7 +24,7 @@ buffer:
 model:
   mlp_size: 64
   recurrent_size: 128
-  dropout: 0.01
+  dropout: 0.00
   memory_name: "SFFM"
   memory:
     input_size: 64

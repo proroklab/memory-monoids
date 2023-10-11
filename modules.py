@@ -16,8 +16,8 @@ def linsymlog(x, key=None):
 def softsymlog(x, key=None):
     return jnp.tanh(x) * (1 + jnp.log(1 + jnp.abs(x)))
 
-def leakytanh(x, key=None):
-    return jnp.tanh(x) + 0.1 * x
+def complex_symlog(x, key=None):
+    return jnp.sign(x) * jnp.log(1 + jnp.abs(x)) * jnp.exp(1j * jnp.angle(x))
 
 @jax.jit
 def mish(x, key=None):
@@ -38,10 +38,11 @@ class RandomSequential(nn.Sequential):
 
 class Block(eqx.Module):
     net: eqx.Module
-    def __init__(self, input_size, output_size, key):
+    def __init__(self, input_size, output_size, dropout, key):
         self.net = RandomSequential([
             ortho_linear(key, input_size, output_size), 
-            #nn.LayerNorm(None, use_bias=False, use_weight=False,),
+            nn.Dropout(dropout),
+            nn.LayerNorm(None, use_bias=False, use_weight=False),
             mish,
         ])
 
@@ -66,10 +67,10 @@ class RecurrentQNetwork(eqx.Module):
         self.input_size = obs_shape
         self.output_size = act_shape
         keys = random.split(key, 7)
-        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], keys[1]))
+        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], config["dropout"], keys[1]))
         self.memory = memory_module
-        self.post0 = eqx.filter_vmap(Block(config["recurrent_size"], config["mlp_size"], keys[2]))
-        self.post1 = eqx.filter_vmap(Block(config["mlp_size"], config["mlp_size"], keys[3]))
+        self.post0 = eqx.filter_vmap(Block(config["recurrent_size"], config["mlp_size"], config["dropout"], keys[2]))
+        self.post1 = eqx.filter_vmap(Block(config["mlp_size"], config["mlp_size"], config["dropout"], keys[3]))
 
         value = final_linear(keys[4], self.config["mlp_size"], 1, scale=0.01)
         self.value = eqx.filter_vmap(value)

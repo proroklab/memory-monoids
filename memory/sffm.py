@@ -55,22 +55,15 @@ class SFFM(eqx.Module):
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
         pre = self.pre(x)
-        pre = pre / (1e-6 + jnp.linalg.norm(pre, axis=-1, keepdims=True))
+        pre = pre / (1e-6 + jnp.linalg.norm(pre, axis=-1, keepdims=True, ord=2))
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
         s = state.reshape(state.shape[0], -1)
-        mag = mish(self.mag(symlog(jnp.abs(s))))
+        mag = mish(self.mag(jnp.log(1 + jnp.abs(s))))
         phase = mish(self.phase(jnp.angle(s)))
-        z = self.mix(mag * phase)
+        z = self.mix(mag * phase) + self.skip(x)
         
-        #z_in = complex_symlog(state)
-        # z_in = jnp.concatenate([jnp.real(z_in), jnp.imag(z_in)], axis=-1).reshape(
-        #     state.shape[0], -1
-        # )
-        # #z = self.mix(z_in / (1e-6 + jnp.linalg.norm(z_in, axis=-1, keepdims=True)))
-        # z = self.mix(z_in)
-        skip = self.skip(x)
         final_state = state[-1:]
-        return z + skip, final_state
+        return z, final_state
 
 
 if __name__ == "__main__":

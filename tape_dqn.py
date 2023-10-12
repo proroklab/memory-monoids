@@ -61,10 +61,6 @@ act_shape = env.action_space.n
 
 key = random.PRNGKey(config["seed"])
 eval_key = random.PRNGKey(config["eval"]["seed"])
-# lr_schedule = optax.cosine_decay_schedule(
-#     init_value=config["train"]["lr"], 
-#     decay_steps=config['collect']['epochs'],
-# )
 lr_schedule = optax.warmup_cosine_decay_schedule(
     init_value=0,
     peak_value=config["train"]["lr"], 
@@ -73,8 +69,8 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
 )
 
 opt = optax.chain(
-    optax.clip_by_global_norm(config["train"]["gradient_clip_ratio"]),
-    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"], b1=config["train"]["beta1"]),
+    optax.clip_by_global_norm(config["train"]["gradient_scale"]),
+    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"]),
 )
 
 
@@ -145,7 +141,6 @@ for epoch in range(1, epochs + 1):
     if epoch <= config["collect"]["random_epochs"]:
         continue
 
-    rb.swap(epoch_key)
     data = rb.sample(config["train"]["batch_size"], sample_key)
 
     transitions_trained += len(transitions['next_reward'])
@@ -159,8 +154,6 @@ for epoch in range(1, epochs + 1):
     )
     q_network = eqx.apply_updates(q_network, updates)
     q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
-    # if epoch % config["train"]["target_delay"] == 0:
-    #     q_target = eqx.tree_inference(hard_update(q_network, q_target), True)
 
     train_elapsed = time.time() - train_start
     total_train_time += train_elapsed
@@ -201,7 +194,7 @@ for epoch in range(1, epochs + 1):
         "train/time_this_epoch": train_elapsed,
         "train/time_total": total_train_time,
         "train/error_min": error_min,
-        "train/error_max": error_max
+        "train/error_max": error_max,
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:

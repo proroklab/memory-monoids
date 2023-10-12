@@ -55,14 +55,16 @@ act_shape = env.action_space.n
 
 key = random.PRNGKey(config["seed"])
 eval_key = random.PRNGKey(config["eval"]["seed"])
-lr_schedule = optax.cosine_decay_schedule(
-    init_value=config["train"]["lr"], 
+lr_schedule = optax.warmup_cosine_decay_schedule(
+    init_value=0,
+    peak_value=config["train"]["lr"], 
+    warmup_steps=config["train"]["warmup_epochs"],
     decay_steps=config['collect']['epochs'],
 )
+
 opt = optax.chain(
-    scale_by_norm(scale=1.0),
-    optax.clip(config["train"]["gclip"]),
-    optax.adamw(lr_schedule, weight_decay=0.001),
+    optax.clip_by_global_norm(config["train"]["gradient_scale"]),
+    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"]),
 )
 
 
@@ -134,7 +136,7 @@ for epoch in range(1, epochs + 1):
     outputs, gradient = segment_ddqn_loss(
         q_network, q_target, data, config["train"]["gamma"], loss_key
     )
-    loss, (q_mean, target_mean, target_network_mean) = outputs
+    loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
     updates, opt_state = jax.jit(opt.update)(
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
@@ -186,6 +188,8 @@ for epoch in range(1, epochs + 1):
         "train/grad_global_norm": optax.global_norm(gradient),
         "train/time_this_epoch": train_elapsed,
         "train/time_total": total_train_time,
+        "train/error_min": error_min,
+        "train/error_max": error_max,
         #"train/mean_noise": mean_noise(q_network),
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}

@@ -12,7 +12,7 @@ collect:
 
 train:
   batch_size: 64
-  gamma: 0.95
+  gamma: 0.98
   target_delay: 50 # In epochs/updates
   lr: 0.00005
   gclip: 0.00005

@@ -44,11 +44,13 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
 
     target = segment["next_reward"] + (1.0 - segment["next_terminated"]) * gamma * next_q
     error = selected_q - target
+    error = jnp.clip(error, a_max=2 * error.std())
+    error_min, error_max = jnp.min(error), jnp.max(error)
     loss = huber(masked_mean(jnp.abs(error), segment['mask']))
     q_mean = masked_mean(q_values, jnp.expand_dims(segment['mask'], -1))
     target_mean = masked_mean(target, segment['mask'])
     target_network_mean = masked_mean(next_q, segment['mask'])
-    return loss, (q_mean, target_mean, target_network_mean)
+    return loss, (q_mean, target_mean, target_network_mean, error_min, error_max)
 
 
 @jax.jit

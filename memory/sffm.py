@@ -18,7 +18,6 @@ class SFFM(eqx.Module):
     pre: nn.Linear
     skip: nn.Linear
     mix: nn.Linear
-    ln: nn.LayerNorm
 
     def __init__(
         self,

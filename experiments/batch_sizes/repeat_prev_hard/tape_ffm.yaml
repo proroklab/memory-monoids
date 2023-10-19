@@ -1,37 +1,38 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.PositionOnlyCartPoleEasy"
+  env: "popgym.envs.RepeatPreviousHard"
   popgym_env: True
-  epochs: 10_000
+  epochs: 1_000
   random_epochs: 10_000
-  eps_start: 0.1
-  eps_end: 0.01
+  eps_start: 0.2
+  eps_end: 0.05
   propagate_state: True
 
 train:
-  batch_size: 2048
-  gamma: 0.98
+  batch_size: 4096
+  gamma: 0.5
   target_delay: 50 # In epochs/updates
   lr: 0.00005
   gradient_scale: 0.01
-  warmup_epochs: 500
+  warmup_epochs: 100
   weight_decay: 0.01
+  train_ratio: 10
 
 buffer:
-  size: 2_000_000 # In timesteps 
+  size: 5_000_000 # In timesteps 
   swap_iters: "auto" # sqrt(batch_size) auto
 
 model:
-  mlp_size: 64
-  recurrent_size: 128
-  dropout: 0.00
-  memory_name: "SFFM"
+  mlp_size: 32
+  recurrent_size: 256
+  dropout: 0.0
+  memory_name: "FFM"
   memory:
-    input_size: 64
-    trace_size: 8
-    context_size: 8
-    output_size: 128
+    input_size: 32
+    trace_size: 4
+    context_size: 64
+    output_size: 256
 
 eval:
   interval: 10

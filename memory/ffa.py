@@ -10,7 +10,8 @@ def init(
 ) -> Tuple[jax.Array, jax.Array]:
     a_low = -math.e
     a_high = -1e-6
-    a = jnp.linspace(a_low, a_high, memory_size)
+    #a = jnp.linspace(a_low, a_high, memory_size)
+    a = jnp.linspace(-0.5, 0.0, memory_size)
     b = 2 * jnp.pi / jnp.linspace(min_period, max_period, context_size)
     return a, b
 
@@ -29,7 +30,7 @@ def log_gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
     # a = jnp.clip(jnp.reshape(a, (1, memory_size, 1)), a_max=-1e-6)
     # b = jnp.reshape(b, (1, 1, context_size))
     a = jnp.clip(jnp.reshape(a, (t.shape[0], memory_size, 1)), a_max=-1e-6)
-    b = jnp.reshape(b, (t.shape[0], 1, context_size))
+    b = jnp.clip(jnp.reshape(b, (t.shape[0], 1, context_size)), a_max=2 * jnp.pi - 1e-6)
     ab = jax.lax.complex(a, b)
     return ab * t.reshape(t.shape[0], 1, 1)
 
@@ -57,25 +58,8 @@ def associative_update(
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
     _, state, i, prev_start, done = carry
     params, x, j, start, next_done = incoming
-    # # TODO: We need to carry two separate flags, not just done
-    # # VALIDATED: Only need start...
-    # state = jax.lax.select(
-    #     jnp.tile(start, (1, *state.shape[1:])),
-    #     #jnp.zeros_like(state),
-    #     x,
-    #     state * gamma(params, j - i) + x
-    # )
     state = jnp.logical_not(start) * state * gamma(params, j - i) + x
     return params, state, j, jnp.logical_or(start, prev_start), next_done
-
-    # state = state * gamma(params, j - i) * jnp.logical_not(start) + x 
-    # #all_next_done_i = all_next_done[i.real.astype(jnp.int32)]
-    # #all_next_done_j = all_next_done[i.real.astype(jnp.int32)]
-    # #state = state * gamma(params, j - i) * jnp.logical_not(all_next_done_j) + x * jnp.logical_not(all_next_done_i)
-    # #state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
-    # #state = state * gamma(params, j - i) + x * jnp.logical_not(next_done)
-    # return state, j, start, next_done
-
 
 
 # Verified fine again

@@ -3,31 +3,35 @@ seed: 0
 collect:
   env: "popgym.envs.RepeatFirstHard"
   popgym_env: True
-  epochs: 2_000
-  random_epochs: 2_000
-  eps_start: 0.1
-  eps_end: 0.01
+  epochs: 1_000
+  random_epochs: 4_000
+  eps_start: 0.2
+  eps_end: 0.05
   propagate_state: True
 
 train:
-  batch_size: 8192 #10240
-  gamma: 0.99
-  target_delay: 150 # In epochs/updates
+  batch_size: 1024
+  gamma: 0.9
+  target_delay: 100 # In epochs/updates
   lr: 0.0001
+  gradient_scale: 0.01
+  warmup_epochs: 100
+  weight_decay: 0.01
+  train_ratio: 10
 
 buffer:
-  size: 800_000 # In timesteps 
-  swap_iters: 64 # sqrt(batch_size) auto
+  size: 5_000_000 # In timesteps 
+  swap_iters: "auto" # sqrt(batch_size) auto
 
 model:
-  mlp_size: 64
+  mlp_size: 32
   recurrent_size: 128
-  dropout: 0.0
-  memory_name: "SFFM"
+  dropout: 0.00
+  memory_name: "FFM"
   memory:
-    input_size: 64
-    trace_size: 32
-    context_size: 4
+    input_size: 32
+    trace_size: 8
+    context_size: 8
     output_size: 128
 
 eval:

@@ -17,6 +17,7 @@ train:
   gradient_scale: 0.01
   warmup_epochs: 500
   weight_decay: 0.01
+  train_ratio: 1
 
 buffer:
   size: 2_000_000 # In timesteps 
@@ -26,12 +27,11 @@ model:
   mlp_size: 64
   recurrent_size: 128
   dropout: 0.00
-  memory_name: "SFFM"
+  memory_name: "LinearAttention"
   memory:
     input_size: 64
-    trace_size: 8
-    context_size: 8
-    output_size: 128
+    key_size: 8
+    value_size: 16
 
 eval:
   interval: 10

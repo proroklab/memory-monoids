@@ -5,18 +5,19 @@ collect:
   popgym_env: True
   epochs: 10_000
   random_epochs: 10_000
-  eps_start: 0.1
+  eps_start: 0.05
   eps_end: 0.01
   propagate_state: True
 
 train:
-  batch_size: 2048
+  batch_size: 30_000
   gamma: 0.98
-  target_delay: 50 # In epochs/updates
-  lr: 0.00005
-  gradient_scale: 0.01
-  warmup_epochs: 500
+  target_delay: 1 # In epochs/updates
+  lr: 0.0005
+  gradient_scale: 1.0 #0.01
+  warmup_epochs: 50
   weight_decay: 0.01
+  train_ratio: 1
 
 buffer:
   size: 2_000_000 # In timesteps 

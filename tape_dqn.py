@@ -26,7 +26,7 @@ from memory.sffm import SFFM
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
 from utils import load_popgym_env, scale_by_norm
-from losses import tape_ddqn_loss
+from losses import tape_ddqn_loss, online_tape_q_loss
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
 
@@ -71,7 +71,8 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
 
 opt = optax.chain(
     optax.clip_by_global_norm(config["train"]["gradient_scale"]),
-    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"]),
+    #optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"]),
+    optax.adabelief(lr_schedule)
 )
 
 
@@ -104,7 +105,7 @@ memory_class = model_map[config["model"]["memory_name"]]
 memory_network = memory_class(**config["model"]["memory"], key=memory_key)
 memory_target = memory_class(**config["model"]["memory"], key=memory_key)
 q_network = RecurrentQNetwork(obs_shape, act_shape, memory_network, config["model"], model_key)
-q_target = RecurrentQNetwork(obs_shape, act_shape, memory_target, config["model"], model_key)
+q_target = eqx.tree_inference(RecurrentQNetwork(obs_shape, act_shape, memory_target, config["model"], model_key), True)
 opt_state = opt.init(eqx.filter(q_network, eqx.is_inexact_array))
 epochs = config["collect"]["random_epochs"] + config["collect"]["epochs"]
 pbar = tqdm.tqdm(total=epochs)
@@ -149,15 +150,16 @@ for epoch in range(1, epochs + 1):
 
         transitions_trained += len(transitions['next_reward'])
 
-        outputs, gradient = tape_ddqn_loss(
+        outputs, gradient = online_tape_q_loss(
             q_network, q_target, data, config["train"]["gamma"], loss_key
         )
         loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
         updates, opt_state = jax.jit(opt.update)(
             gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
         )
+        q_target = hard_update(q_network, q_target)
         q_network = eqx.apply_updates(q_network, updates)
-        q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
+        #q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
         # if epoch % config["train"]["target_delay"] == 0:
         #     q_target = eqx.tree_inference(hard_update(q_network, q_target), True)
 

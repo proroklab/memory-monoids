@@ -1,23 +1,23 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.RepeatPreviousHard"
+  env: "popgym.envs.RepeatPreviousEasy"
   popgym_env: True
-  epochs: 1_000
-  random_epochs: 10_000
+  epochs: 4_000
+  random_epochs: 4_000
   eps_start: 0.2
   eps_end: 0.05
   propagate_state: True
 
 train:
-  batch_size: 4096
+  batch_size: 40_000
   gamma: 0.5
-  target_delay: 50 # In epochs/updates
-  lr: 0.00005
+  target_delay: 1 # In epochs/updates
+  lr: 0.0005
   gradient_scale: 0.01
   warmup_epochs: 100
   weight_decay: 0.01
-  train_ratio: 10
+  train_ratio: 1
 
 buffer:
   size: 5_000_000 # In timesteps 
@@ -25,14 +25,14 @@ buffer:
 
 model:
   mlp_size: 32
-  recurrent_size: 256
-  dropout: 0.0
-  memory_name: "FFM"
+  recurrent_size: 64
+  dropout: 0.00
+  memory_name: "SFFM"
   memory:
     input_size: 32
-    trace_size: 4
-    context_size: 64
-    output_size: 256
+    trace_size: 8
+    context_size: 8
+    output_size: 64
 
 eval:
   interval: 10

@@ -5,6 +5,17 @@ import equinox as eqx
 from equinox import nn
 
 import memory.ffa as ffa
+from modules import complex_symlog, gaussian, leaky_relu, linear_softplus, mish, smooth_leaky_relu
+
+
+class NormalizedLinear(eqx.Module):
+    linear: nn.Linear
+    def __init__(self, input_size, output_size, key):
+        self.linear = nn.Linear(input_size, output_size, key=key)
+    
+    def __call__(self, x, key=None):
+        out = self.linear(x)
+        return out / (1e-6 + jnp.linalg.norm(out, keepdims=True, ord=1))
 
 
 class SFFM(eqx.Module):
@@ -18,6 +29,10 @@ class SFFM(eqx.Module):
     pre: nn.Linear
     skip: nn.Linear
     mix: nn.Linear
+    ln: nn.LayerNorm
+    mag_query: eqx.Module
+    phase_query: eqx.Module
+    mask: eqx.Module
 
     def __init__(
         self,
@@ -32,11 +47,25 @@ class SFFM(eqx.Module):
         self.trace_size = trace_size
         self.context_size = context_size
 
-        _, k1, k2, k3, = jax.random.split(key, 4)
+        _, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(key, 9)
         self.pre = eqx.filter_vmap(nn.Linear(input_size, trace_size, key=k1))
+        self.mag_query = eqx.filter_vmap(nn.Linear(input_size, trace_size, key=k3))
+        self.phase_query = eqx.filter_vmap(nn.Linear(input_size, context_size, key=k4))
         self.skip = eqx.filter_vmap(nn.Linear(input_size, self.output_size, key=k2))
         self.ffa_params = ffa.init(trace_size, context_size)
-        self.mix = eqx.filter_vmap(nn.Linear(3 * trace_size * context_size, self.output_size, key=k3))
+        # self.mix = eqx.filter_vmap(
+        #      nn.Linear(2 * context_size * trace_size, self.output_size, key=k5)
+        # )
+        self.mask = eqx.filter_vmap(nn.Linear(input_size, context_size * trace_size, key=k6))
+        self.mix = eqx.filter_vmap(nn.Sequential([
+            nn.Linear(2 * trace_size * context_size, trace_size * context_size, key=k5),
+            mish,
+            nn.Linear(trace_size * context_size, trace_size * context_size, key=k6),
+            mish,
+            nn.Linear(trace_size * context_size, self.output_size, key=k7)
+        ])
+        )
+        self.ln = eqx.filter_vmap(nn.LayerNorm((None,), use_weight=False, use_bias=False))
 
     @eqx.filter_jit
     def initial_state(self, shape=tuple()):
@@ -46,18 +75,16 @@ class SFFM(eqx.Module):
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
-        pre = self.pre(x)
-        pre = pre / (1e-6 + jnp.linalg.norm(pre, axis=-1, keepdims=True, ord=2))
+        pre = linear_softplus(self.pre(x))
+        #pre = 1 + jax.nn.elu(self.pre(x))
+        #pre = self.pre(x)
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
         s = state.reshape(state.shape[0], -1)
-        magnitude = jnp.log(1 + jnp.abs(s))
-        angle = jnp.angle(s)
-        z = self.mix(
-            jnp.concatenate([magnitude, jnp.sin(angle), jnp.cos(angle)], axis=-1)
-        )
-        
+        scaled = s / (1e-6 + jnp.linalg.norm(s, ord=jnp.inf, axis=1, keepdims=True))
+                      
+        z = self.mix(jnp.concatenate([scaled.real, scaled.imag], axis=-1))
         final_state = state[-1:]
-        return z + self.skip(x), final_state
+        return self.ln(z + self.skip(x)), final_state
 
 
 if __name__ == "__main__":

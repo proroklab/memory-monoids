@@ -19,9 +19,29 @@ def softsymlog(x, key=None):
 def complex_symlog(x, key=None):
     return jnp.sign(x) * jnp.log(1 + jnp.abs(x)) * jnp.exp(1j * jnp.angle(x))
 
+def linear_softplus(x, key=None):
+    parabolic_constant = jnp.arcsinh(1) + jnp.sqrt(2)
+    return jnp.log(1 + jnp.exp(x * parabolic_constant))
+
+
 @jax.jit
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
+
+@jax.jit
+def leaky_relu(x, key=None):
+    return jax.nn.leaky_relu(x)
+
+@jax.jit
+def smooth_leaky_relu(x, key=None):
+    b = 0.05
+    return (x < 0) * (jnp.exp((1 - b) * x) + b * x - 1.0) + (x >= 0) * x
+    
+
+@jax.jit
+def gaussian(x, key=None):
+    return jnp.exp(-x ** 2)
+
 
 # @jax.jit
 # def mish(x, key=None):
@@ -42,8 +62,10 @@ class Block(eqx.Module):
         self.net = RandomSequential([
             ortho_linear(key, input_size, output_size), 
             nn.Dropout(dropout),
-            nn.LayerNorm(None, use_bias=False, use_weight=False),
+            nn.LayerNorm(output_size),
             mish,
+            #gaussian
+            #smooth_leaky_relu,
         ])
 
     def __call__(self, x, key=None):
@@ -127,9 +149,10 @@ class Lambda(eqx.Module):
 def ortho_init(key, linear, scale):
     init = jax.nn.initializers.orthogonal(scale=scale)
     linear = eqx.tree_at(lambda l: l.weight, linear, init(key, linear.weight.shape))
+    linear = eqx.tree_at(lambda l: l.bias, linear, jnp.zeros_like(linear.bias))
     return linear
 
-def ortho_linear(key, input_size, output_size, scale=1.0):
+def ortho_linear(key, input_size, output_size, scale=2 ** 0.5):
     return ortho_init(key, eqx.nn.Linear(input_size, output_size, key=key), scale=scale)
 
 def final_linear(key, input_size, output_size, scale=0.01):

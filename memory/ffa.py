@@ -11,7 +11,7 @@ def init(
     a_low = -math.e
     a_high = -1e-6
     #a = jnp.linspace(a_low, a_high, memory_size)
-    a = jnp.linspace(-0.5, 0.0, memory_size)
+    a = jnp.linspace(-0.5, 1e-6, memory_size)
     b = 2 * jnp.pi / jnp.linspace(min_period, max_period, context_size)
     return a, b
 
@@ -30,7 +30,7 @@ def log_gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
     # a = jnp.clip(jnp.reshape(a, (1, memory_size, 1)), a_max=-1e-6)
     # b = jnp.reshape(b, (1, 1, context_size))
     a = jnp.clip(jnp.reshape(a, (t.shape[0], memory_size, 1)), a_max=-1e-6)
-    b = jnp.clip(jnp.reshape(b, (t.shape[0], 1, context_size)), a_max=2 * jnp.pi - 1e-6)
+    b = jnp.reshape(b, (t.shape[0], 1, context_size))
     ab = jax.lax.complex(a, b)
     return ab * t.reshape(t.shape[0], 1, 1)
 

@@ -227,7 +227,6 @@ class ShuffledTapeBuffer(TapeBuffer):
 
     def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
         out = {k: [] for k in self.data}
-        assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
         rng = np.random.default_rng(jax.random.bits(key).item())
         count = 0
         #while len(sample_idxs) < size:

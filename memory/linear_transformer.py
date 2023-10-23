@@ -40,7 +40,7 @@ class LinearAttention(eqx.Module):
                 phi
             ]
         ))
-        self.value = eqx.filter_vmap(nn.Linear(input_size, value_size, use_bias=False, key=keys[2]))
+        self.value = eqx.filter_vmap(nn.Linear(input_size, value_size, key=keys[2]))
         self.skip = eqx.filter_vmap(nn.Linear(input_size, hidden_size, key=keys[3]))
         self.mlp = eqx.filter_vmap(nn.Sequential(
             [

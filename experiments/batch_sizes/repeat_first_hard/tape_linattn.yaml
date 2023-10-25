@@ -10,14 +10,14 @@ collect:
   propagate_state: True
 
 train:
-  batch_size: 40_000
+  batch_size: 10_000
   gamma: 0.5
-  target_delay: 1 # In epochs/updates
-  lr: 0.0005
+  target_delay: 100 # In epochs/updates
+  lr: 0.0001
   gradient_scale: 0.01
   warmup_epochs: 100
   weight_decay: 0.01
-  train_ratio: 1
+  train_ratio: 5
 
 buffer:
   size: 5_000_000 # In timesteps 
@@ -25,14 +25,13 @@ buffer:
 
 model:
   mlp_size: 32
-  recurrent_size: 64
+  recurrent_size: 128
   dropout: 0.00
-  memory_name: "SFFM"
+  memory_name: "LinearAttention"
   memory:
     input_size: 32
-    trace_size: 16
-    context_size: 16
-    output_size: 64
+    key_size: 8
+    value_size: 16
 
 eval:
   interval: 10

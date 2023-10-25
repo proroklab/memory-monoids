@@ -6,7 +6,6 @@ import equinox as eqx
 from modules import softsymlog
 
 
-@jax.jit
 def huber(x):
     return jax.lax.select(
         jnp.abs(x) < 1.0,
@@ -14,12 +13,10 @@ def huber(x):
         jnp.abs(x) - 0.5 
     )
 
-@jax.jit
 def masked_mean(x, mask):
     return jnp.sum(x * mask) / mask.sum()
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
-@eqx.filter_jit
 def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     # Double DQN
     B, T = segment["next_reward"].shape
@@ -53,12 +50,10 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     return loss, (q_mean, target_mean, target_network_mean, error_min, error_max)
 
 
-@jax.jit
 def tempered_softmax(x, temp=10, key=None):
     return jax.nn.softmax(x * temp)
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
-@eqx.filter_jit
 def online_tape_q_loss(q_network, q_target, tape, gamma, key):
     B = tape["next_reward"].shape[0]
     batch_idx = jnp.arange(B)
@@ -89,6 +84,7 @@ def online_tape_q_loss(q_network, q_target, tape, gamma, key):
     # Mean is across action dim
     #constraint = jax.nn.logsumexp(huber(next_q_action_idx - next_q_target) - jnp.log(B))
     #constraint = jax.scipy.special.kl_div(jax.nn.softmax(next_q_action_idx, axis=-1), jax.nn.softmax(next_q_target, axis=-1)).sum(-1)
+    # TODO: Constrain latent state variance instead of q values
     constraint = huber(next_q_action_idx - next_q_target)
     loss = loss.mean() + constraint.mean() 
     q_mean = jnp.mean(q_values)
@@ -97,7 +93,6 @@ def online_tape_q_loss(q_network, q_target, tape, gamma, key):
     return loss, (q_mean, target_mean, jnp.mean(constraint), error_min, error_max)
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
-@eqx.filter_jit
 def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
     B = tape["next_reward"].shape[0]
     batch_idx = jnp.arange(B)
@@ -128,7 +123,6 @@ def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
     return loss.mean(), (q_mean, target_mean, target_network_mean, error_min, error_max)
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
-@eqx.filter_jit
 def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
     B = tape["next_reward"].shape[0]
     batch_idx = jnp.arange(B)

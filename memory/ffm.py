@@ -55,7 +55,6 @@ class FFM(eqx.Module):
         self.mix = nn.Linear(2 * trace_size * context_size, self.output_size, key=k5)
         self.ln = nn.LayerNorm(self.output_size, use_weight=False, use_bias=False)
 
-    @eqx.filter_jit
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
@@ -75,7 +74,6 @@ class FFM(eqx.Module):
 
         return out, final_state
 
-    @eqx.filter_jit
     def initial_state(self, shape=tuple()):
         return jnp.zeros((*shape, 1, self.trace_size, self.context_size), dtype=jnp.complex64)
 

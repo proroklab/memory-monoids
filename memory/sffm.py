@@ -30,9 +30,6 @@ class SFFM(eqx.Module):
     skip: nn.Linear
     mix: nn.Linear
     ln: nn.LayerNorm
-    mag_query: eqx.Module
-    phase_query: eqx.Module
-    mask: eqx.Module
 
     def __init__(
         self,
@@ -48,15 +45,13 @@ class SFFM(eqx.Module):
         self.context_size = context_size
 
         _, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(key, 9)
-        self.pre = eqx.filter_vmap(nn.Linear(input_size, trace_size, key=k1))
-        self.mag_query = eqx.filter_vmap(nn.Linear(input_size, trace_size, key=k3))
-        self.phase_query = eqx.filter_vmap(nn.Linear(input_size, context_size, key=k4))
+        self.pre = eqx.filter_vmap(nn.Sequential([
+            nn.LayerNorm((None,), use_weight=False, use_bias=False),
+            nn.Linear(input_size, trace_size, key=k1),
+            linear_softplus,
+        ]))
         self.skip = eqx.filter_vmap(nn.Linear(input_size, self.output_size, key=k2))
         self.ffa_params = ffa.init(trace_size, context_size)
-        # self.mix = eqx.filter_vmap(
-        #      nn.Linear(2 * context_size * trace_size, self.output_size, key=k5)
-        # )
-        self.mask = eqx.filter_vmap(nn.Linear(input_size, context_size * trace_size, key=k6))
         self.mix = eqx.filter_vmap(nn.Sequential([
             nn.Linear(2 * trace_size * context_size, trace_size * context_size, key=k5),
             mish,
@@ -67,21 +62,18 @@ class SFFM(eqx.Module):
         )
         self.ln = eqx.filter_vmap(nn.LayerNorm((None,), use_weight=False, use_bias=False))
 
-    @eqx.filter_jit
     def initial_state(self, shape=tuple()):
         return jnp.zeros((*shape, 1, self.trace_size, self.context_size), dtype=jnp.complex64)
 
-    @eqx.filter_jit
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
-        pre = linear_softplus(self.pre(x))
-        #pre = 1 + jax.nn.elu(self.pre(x))
-        #pre = self.pre(x)
+        pre = self.pre(x)
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
         s = state.reshape(state.shape[0], -1)
-        scaled = s / (1e-6 + jnp.linalg.norm(s, ord=jnp.inf, axis=1, keepdims=True))
-                      
+        #scaled = s / (1e-6 + jnp.linalg.norm(s, ord=jnp.inf, axis=1, keepdims=True))
+        scaled = (s - jnp.mean(s, keepdims=True)) / (1e-6 + jnp.std(s, keepdims=True))
+        #scaled = self.ln(s)
         z = self.mix(jnp.concatenate([scaled.real, scaled.imag], axis=-1))
         final_state = state[-1:]
         return self.ln(z + self.skip(x)), final_state

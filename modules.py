@@ -24,21 +24,17 @@ def linear_softplus(x, key=None):
     return jnp.log(1 + jnp.exp(x * parabolic_constant))
 
 
-@jax.jit
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
 
-@jax.jit
 def leaky_relu(x, key=None):
     return jax.nn.leaky_relu(x)
 
-@jax.jit
 def smooth_leaky_relu(x, key=None):
     b = 0.05
     return (x < 0) * (jnp.exp((1 - b) * x) + b * x - 1.0) + (x >= 0) * x
     
 
-@jax.jit
 def gaussian(x, key=None):
     return jnp.exp(-x ** 2)
 
@@ -101,7 +97,6 @@ class RecurrentQNetwork(eqx.Module):
         scale = final_linear(keys[6], self.config["mlp_size"], 1, scale=0.01)
         self.scale = eqx.filter_vmap(scale)
 
-    @eqx.filter_jit
     def __call__(self, x, state, start, done, key):
         T = x.shape[0]
         net_keys = random.split(key, 3 * T)
@@ -122,7 +117,6 @@ class RecurrentQNetwork(eqx.Module):
         q = value + scale * advantage
         return q, final_state
 
-    @eqx.filter_jit
     def initial_state(self, shape=tuple()):
         return self.memory.initial_state(shape)
 
@@ -135,7 +129,6 @@ def mean_noise(network):
     return result
 
 
-@eqx.filter_jit
 class Lambda(eqx.Module):
     f: Callable
 
@@ -209,7 +202,6 @@ class NoisyLinear(eqx.nn.Linear):
         # return lin + bias_noise + weight_noise
 
 
-#@jax.jit
 def anneal(epsilon_start, epsilon_end, progress):
     return epsilon_start + (epsilon_end - epsilon_start) * progress
 
@@ -219,7 +211,6 @@ def make_random_policy(env):
         return env.action_space.sample(), state
 
 
-@eqx.filter_jit
 def greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
@@ -227,7 +218,6 @@ def greedy_policy(
     action = jnp.argmax(q_values)
     return action, state
 
-@eqx.filter_jit
 def boltzmann_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
@@ -237,7 +227,6 @@ def boltzmann_policy(
     action = jax.random.categorical(s_key, q_values / temp, axis=-1).squeeze(-1)
     return action, state
 
-@eqx.filter_jit
 def epsilon_greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
@@ -255,7 +244,6 @@ def epsilon_greedy_policy(
     return action, state
 
 
-@eqx.filter_jit
 def hard_update(network, target):
     params = eqx.filter(network, eqx.is_inexact_array)
     _, static = eqx.partition(target, eqx.is_inexact_array)
@@ -263,7 +251,6 @@ def hard_update(network, target):
     return target
 
 
-@eqx.filter_jit
 def soft_update(network, target, tau):
     def polyak(param, target_param):
         return target_param * (1 - tau) + param * tau

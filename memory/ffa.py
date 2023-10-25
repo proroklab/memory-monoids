@@ -3,39 +3,46 @@ from typing import Tuple
 import jax
 from jax import numpy as jnp
 from functools import partial
+from memory.primes import PRIMES
+
 
 
 def init(
     memory_size: int, context_size: int, min_period: int = 1, max_period: int = 1024
 ) -> Tuple[jax.Array, jax.Array]:
-    a_low = -math.e
+    a_low = -0.5
     a_high = -1e-6
-    #a = jnp.linspace(a_low, a_high, memory_size)
-    a = jnp.linspace(-0.5, 1e-6, memory_size)
-    b = 2 * jnp.pi / jnp.linspace(min_period, max_period, context_size)
+    a = jnp.linspace(a_low, a_high, memory_size)
+    # a = jnp.logspace(jnp.log(0.5), jnp.log(0.001), memory_size, base=jnp.e)
+    # a = jnp.geomspace(-0.5, -1e-3, memory_size)
+    # b = 2 * jnp.pi / jnp.linspace(min_period, max_period, context_size)
+    # b = 2 * jnp.pi / jnp.round(jnp.geomspace(min_period, 10_000, context_size)).astype(jnp.float32)
+    b = 2 * jnp.pi / jnp.round(jnp.geomspace(min_period, 10_000, context_size))
+    # b = 2 * jnp.pi / jnp.arange(1, context_size + 1) ** 2
+    # b = 2 * jnp.pi / jnp.array(PRIMES[:context_size], dtype=jnp.float32)
+
+    # b = 2 * jnp.pi / (jnp.arange(1, 1 + context_size) * max_period / context_size)
     return a, b
 
 
-@jax.jit
 def initial_state(params: Tuple[jax.Array, jax.Array]) -> jax.Array:
     a, b = params
     memory_size, context_size = len(a), len(b)
     return jnp.zeros((1, memory_size, context_size))
 
 
-@jax.jit
 def log_gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
     a, b = params
     memory_size, context_size = a.shape[-1], b.shape[-1]
     # a = jnp.clip(jnp.reshape(a, (1, memory_size, 1)), a_max=-1e-6)
     # b = jnp.reshape(b, (1, 1, context_size))
-    a = jnp.clip(jnp.reshape(a, (t.shape[0], memory_size, 1)), a_max=-1e-6)
+    a = jnp.clip(jnp.reshape(a, (t.shape[0], memory_size, 1)), a_max=0)
+    #b = jax.lax.stop_gradient(jnp.reshape(b, (t.shape[0], 1, context_size)))
     b = jnp.reshape(b, (t.shape[0], 1, context_size))
     ab = jax.lax.complex(a, b)
     return ab * t.reshape(t.shape[0], 1, 1)
 
 
-@jax.jit
 def gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
     return jnp.exp(log_gamma(params, t))
 
@@ -50,22 +57,40 @@ def gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
 # During inference, "next_done" will never be received because we only
 # ever see one step/episode at a time.
 # This is probably what we want (to only use next_done during training)
-@jax.jit
 def associative_update(
-    #params: Tuple[jax.Array, jax.Array],
+    # params: Tuple[jax.Array, jax.Array],
     carry: Tuple[jax.Array, jax.Array, jax.Array],
     incoming: Tuple[jax.Array, jax.Array, jax.Array],
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
     _, state, i, prev_start, done = carry
     params, x, j, start, next_done = incoming
+    # # TODO: We need to carry two separate flags, not just done
+    # # VALIDATED: Only need start...
+    # state = jax.lax.select(
+    #     jnp.tile(start, (1, *state.shape[1:])),
+    #     #jnp.zeros_like(state),
+    #     x,
+    #     state * gamma(params, j - i) + x
+    # )
     state = jnp.logical_not(start) * state * gamma(params, j - i) + x
     return params, state, j, jnp.logical_or(start, prev_start), next_done
 
+    # state = state * gamma(params, j - i) * jnp.logical_not(start) + x
+    # #all_next_done_i = all_next_done[i.real.astype(jnp.int32)]
+    # #all_next_done_j = all_next_done[i.real.astype(jnp.int32)]
+    # #state = state * gamma(params, j - i) * jnp.logical_not(all_next_done_j) + x * jnp.logical_not(all_next_done_i)
+    # #state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
+    # #state = state * gamma(params, j - i) + x * jnp.logical_not(next_done)
+    # return state, j, start, next_done
+
 
 # Verified fine again
-@jax.jit
 def apply(
-    params: Tuple[jax.Array, jax.Array], x: jax.Array, state: jax.Array, start: jax.Array, next_done: jax.Array
+    params: Tuple[jax.Array, jax.Array],
+    x: jax.Array,
+    state: jax.Array,
+    start: jax.Array,
+    next_done: jax.Array,
 ) -> jax.Array:
     # x: [T, memory_size]
     # memory: [1, memory_size, context_size]
@@ -73,7 +98,9 @@ def apply(
     memory_size, context_size = len(params[0]), len(params[1])
     timestep = jnp.arange(T + 1, dtype=jnp.int32)
     # Add context dim
-    x = jnp.repeat(jnp.expand_dims(x, axis=-1).astype(jnp.complex64), context_size, axis=-1)
+    x = jnp.repeat(
+        jnp.expand_dims(x, axis=-1).astype(jnp.complex64), context_size, axis=-1
+    )
     start = start.reshape(T, 1, 1)
     next_done = next_done.reshape(T, 1, 1)
 
@@ -82,14 +109,18 @@ def apply(
     start = jnp.concatenate([jnp.zeros_like(start[:1]), start], axis=0)
     next_done = jnp.concatenate([jnp.zeros_like(next_done[:1]), next_done], axis=0)
 
-    broadcasted_params = [jnp.broadcast_to(jnp.expand_dims(p, 0), (x.shape[0], *p.shape)) for p in params]
+    broadcasted_params = [
+        jnp.broadcast_to(jnp.expand_dims(p, 0), (x.shape[0], *p.shape)) for p in params
+    ]
 
     # Fold the previous recurrent state into x (if not start)
-    #x = state * gamma(params, jnp.array([1])) + x
+    # x = state * gamma(params, jnp.array([1])) + x
     # This is not executed during inference -- method will just return x if size is 1
     _, new_state, _, _, _ = jax.lax.associative_scan(
-        #parameterized_update, (x, timestep, start, next_done), axis=0
-        associative_update, (broadcasted_params, x, timestep, start, next_done), axis=0
+        # parameterized_update, (x, timestep, start, next_done), axis=0
+        associative_update,
+        (broadcasted_params, x, timestep, start, next_done),
+        axis=0,
     )
     return new_state[1:]
 

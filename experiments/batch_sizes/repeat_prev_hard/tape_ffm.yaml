@@ -1,7 +1,7 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.RepeatPreviousEasy"
+  env: "popgym.envs.RepeatPreviousMedium"
   popgym_env: True
   epochs: 4_000
   random_epochs: 4_000
@@ -31,7 +31,7 @@ model:
   memory:
     input_size: 32
     trace_size: 8
-    context_size: 8
+    context_size: 32
     output_size: 64
 
 eval:

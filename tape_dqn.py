@@ -115,16 +115,12 @@ eval_collector = TapeCollector(eval_env, config["eval"])
 transitions_collected = 0
 transitions_trained = 0
 
-# Precompile models
-# print("Precompiling models, this may take some time...")
-# dummy_data = rb.zeros(config["train"]["batch_size"])
-# outputs, gradient = tape_ddqn_loss(
-#     q_network, q_target, dummy_data, config["train"]["gamma"], jax.random.PRNGKey(0)
-# )
-
+total_train_time = 0
+train_elapsed = 0
 total_train_time = 0
 for epoch in range(1, epochs + 1):
-    train_start = time.time()
+    if epoch > 1:
+        train_start = time.time()
     pbar.update()
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
@@ -134,7 +130,7 @@ for epoch in range(1, epochs + 1):
         transitions,
         cumulative_reward,
         best_ep_reward
-    ) = collector(q_network, epsilon_greedy_policy, jnp.array(progress), epoch_key, False)
+    ) = collector(q_network, eqx.filter_jit(epsilon_greedy_policy), jnp.array(progress), epoch_key, False)
 
     rb.add(epoch_key, **transitions)
     rb.on_episode_end()
@@ -147,24 +143,29 @@ for epoch in range(1, epochs + 1):
     for _ in range(config["train"]["train_ratio"]):
         _, sample_key = random.split(sample_key)
         data = rb.sample(config["train"]["batch_size"], sample_key)
-
         transitions_trained += len(transitions['next_reward'])
 
-        outputs, gradient = online_tape_q_loss(
-            q_network, q_target, data, config["train"]["gamma"], loss_key
-        )
-        loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
-        updates, opt_state = jax.jit(opt.update)(
-            gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
-        )
-        q_target = hard_update(q_network, q_target)
-        q_network = eqx.apply_updates(q_network, updates)
+        def update(q_network, q_target, data, gamma, opt_state, loss_key):
+            outputs, gradient = online_tape_q_loss(
+                q_network, q_target, data, gamma, loss_key
+            )
+            loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
+            updates, opt_state = opt.update(
+                gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
+            )
+            q_target = q_network 
+            q_network = eqx.apply_updates(q_network, updates)
+
+            return q_network, q_target, gradient, opt_state, loss, q_mean, target_mean, target_network_mean, error_min, error_max
+        
+        q_network, q_target, gradient, opt_state, loss, q_mean, target_mean, target_network_mean, error_min, error_max = eqx.filter_jit(update)(q_network, q_target, data, config["train"]["gamma"], opt_state, loss_key)
         #q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
         # if epoch % config["train"]["target_delay"] == 0:
         #     q_target = eqx.tree_inference(hard_update(q_network, q_target), True)
 
-    train_elapsed = time.time() - train_start
-    total_train_time += train_elapsed
+    if epoch > 1:
+        train_elapsed = time.time() - train_start
+        total_train_time += train_elapsed
     # Eval
     q_eval = eqx.tree_inference(q_network, True)
     if epoch % config["eval"]["interval"] == 0:
@@ -172,7 +173,7 @@ for epoch in range(1, epochs + 1):
         eval_rewards = []
         for i in range(config["eval"]["episodes"]):
             _, eval_ep_reward, _ = eval_collector(
-                q_eval, greedy_policy, 1.0, eval_keys[i], True
+                q_eval, eqx.filter_jit(greedy_policy), 1.0, eval_keys[i], True
             )
             eval_rewards.append(eval_ep_reward)
         eval_ep_reward = np.mean(eval_rewards)

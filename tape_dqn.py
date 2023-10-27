@@ -22,13 +22,13 @@ import yaml
 
 from modules import epsilon_greedy_policy, anneal, boltzmann_policy, mean_noise
 from memory.gru import GRU
-from memory.sffm import SFFM
+from memory.sffm import SFFM, DSFFM
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
 from utils import load_popgym_env, scale_by_norm
 from losses import tape_ddqn_loss, online_tape_q_loss
 
-model_map = {GRU.name: GRU, SFFM.name: SFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
+model_map = {GRU.name: GRU, SFFM.name: SFFM, DSFFM.name: DSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
@@ -71,8 +71,7 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
 
 opt = optax.chain(
     optax.clip_by_global_norm(config["train"]["gradient_scale"]),
-    #optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"]),
-    optax.adabelief(lr_schedule)
+    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"], eps=1e-6),
 )
 
 
@@ -145,23 +144,15 @@ for epoch in range(1, epochs + 1):
         data = rb.sample(config["train"]["batch_size"], sample_key)
         transitions_trained += len(transitions['next_reward'])
 
-        def update(q_network, q_target, data, gamma, opt_state, loss_key):
-            outputs, gradient = online_tape_q_loss(
-                q_network, q_target, data, gamma, loss_key
-            )
-            loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
-            updates, opt_state = opt.update(
-                gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
-            )
-            q_target = q_network 
-            q_network = eqx.apply_updates(q_network, updates)
-
-            return q_network, q_target, gradient, opt_state, loss, q_mean, target_mean, target_network_mean, error_min, error_max
-        
-        q_network, q_target, gradient, opt_state, loss, q_mean, target_mean, target_network_mean, error_min, error_max = eqx.filter_jit(update)(q_network, q_target, data, config["train"]["gamma"], opt_state, loss_key)
-        #q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
-        # if epoch % config["train"]["target_delay"] == 0:
-        #     q_target = eqx.tree_inference(hard_update(q_network, q_target), True)
+        outputs, gradient = eqx.filter_jit(online_tape_q_loss)(
+            q_network, q_target, data, config["train"]["gamma"], loss_key
+        )
+        loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
+        updates, opt_state = eqx.filter_jit(opt.update)(
+            gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
+        )
+        q_network = eqx.filter_jit(eqx.apply_updates)(q_network, updates)
+        q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
 
     if epoch > 1:
         train_elapsed = time.time() - train_start

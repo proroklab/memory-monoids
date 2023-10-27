@@ -23,6 +23,8 @@ def linear_softplus(x, key=None):
     parabolic_constant = jnp.arcsinh(1) + jnp.sqrt(2)
     return jnp.log(1 + jnp.exp(x * parabolic_constant))
 
+def soft_relglu(x, key=None):
+    return linear_softplus(jax.nn.glu(x))
 
 def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))

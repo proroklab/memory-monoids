@@ -4,15 +4,15 @@ collect:
   env: "popgym.envs.RepeatPreviousMedium"
   popgym_env: True
   epochs: 4_000
-  random_epochs: 4_000
+  random_epochs: 8_000
   eps_start: 0.2
   eps_end: 0.05
   propagate_state: True
 
 train:
-  batch_size: 40_000
+  batch_size: 10_000
   gamma: 0.5
-  target_delay: 1 # In epochs/updates
+  target_delay: 200 # In epochs/updates
   lr: 0.0005
   gradient_scale: 0.01
   warmup_epochs: 100
@@ -24,15 +24,14 @@ buffer:
   swap_iters: "auto" # sqrt(batch_size) auto
 
 model:
-  mlp_size: 32
-  recurrent_size: 64
+  mlp_size: 256
+  recurrent_size: 256
   dropout: 0.00
-  memory_name: "SFFM"
+  memory_name: "DSFFM"
   memory:
-    input_size: 32
-    trace_size: 8
+    input_size: 256
+    trace_size: 32
     context_size: 32
-    output_size: 64
 
 eval:
   interval: 10

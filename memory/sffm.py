@@ -5,7 +5,7 @@ import equinox as eqx
 from equinox import nn
 
 import memory.ffa as ffa
-from modules import complex_symlog, gaussian, leaky_relu, linear_softplus, mish, smooth_leaky_relu, soft_relglu
+from modules import symlog, complex_symlog, gaussian, leaky_relu, linear_softplus, mish, smooth_leaky_relu, soft_relglu
 
 
 class NormalizedLinear(eqx.Module):
@@ -36,6 +36,46 @@ def elu_glu(x, key=None):
     a, b = jnp.split(x, 2, -1)
     return (1 + jax.nn.elu(a)) * jax.nn.sigmoid(b)
 
+
+class NSFFM(eqx.Module):
+    sffm: list
+    trace_size: int
+    context_size: int
+    num_blocks: int
+    name: str = "NSFFM"
+
+    def __init__(
+        self,
+        input_size: int,
+        trace_size: int,
+        context_size: int,
+        num_blocks: int,
+        key: jax.random.PRNGKey,
+    ):
+        k = jax.random.split(key, num_blocks + 1)
+        self.sffm = [
+            SFFM(input_size, trace_size, context_size, k[i+1])
+            for i in range(num_blocks)
+        ]
+        self.trace_size = trace_size
+        self.context_size = context_size
+        self.num_blocks = num_blocks
+
+    def __call__(
+        self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
+    ) -> Tuple[jax.Array, jax.Array]:
+        y = x
+        for i, block in enumerate(self.sffm):
+            key, k = jax.random.split(key)
+            y, s = block(y, state[i], start, next_done, key)
+            state[i] = s
+        return y, state 
+
+    def initial_state(self, shape=tuple()):
+        return [
+            jnp.zeros((*shape, 1, self.trace_size, self.context_size), dtype=jnp.complex64)
+            for _ in range(self.num_blocks)
+        ]
 
 class DSFFM(eqx.Module):
     sffm0: eqx.Module
@@ -72,6 +112,49 @@ class DSFFM(eqx.Module):
             for _ in range(2)
         ]
     
+
+class LSEPool(eqx.Module):
+    def __call__(self, x, key=None):
+        context = jax.nn.logsumexp(x, axis=-1) 
+        trace = jax.nn.logsumexp(x, axis=-2) 
+        return jnp.concatenate([context, trace], axis=-1)
+
+class MaxPool(eqx.Module):
+    def __call__(self, x, key=None):
+        abs_x = jnp.abs(x)
+        context_idx = jnp.argmax(abs_x, axis=-1, keepdims=True)
+        trace_idx = jnp.argmax(abs_x, axis=-2, keepdims=True)
+        return jnp.concatenate([
+            jnp.take_along_axis(x, context_idx, -1).squeeze(-1),
+            jnp.take_along_axis(x, trace_idx, -2).squeeze(-2)
+        ], axis=-1)
+    
+
+class MeanPool(eqx.Module):
+    def __call__(self, x, key=None):
+        context = jnp.mean(x, axis=-1) 
+        trace = jnp.mean(x, axis=-2) 
+        return jnp.concatenate([context, trace], axis=-1)
+
+class DualAttention(eqx.Module):
+    c: nn.Linear
+    a: nn.Linear
+
+    def __init__(self, input_size, trace_size, context_size, key):
+        _, k0, k1 = jax.random.split(key, 3)
+        self.a = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k0))
+        self.c = eqx.filter_vmap(nn.Linear(input_size, context_size, use_bias=False, key=k1))
+
+    def __call__(self, x, state, key=None):
+        a, c = self.a(x), self.c(x)
+        a = jax.lax.complex(jax.nn.softmax(a, axis=-1), jnp.zeros_like(a))
+        c = jax.lax.complex(jax.nn.softmax(c, axis=-1), jnp.zeros_like(c))
+        a_attn = jnp.einsum("btc, bt -> bc", state, a)
+        c_attn = jnp.einsum("btc, bc -> bt", state, c)
+        return jnp.concatenate([a_attn, c_attn], axis=-1)
+
+        
+
 class SFFM(eqx.Module):
     input_size: int
     trace_size: int
@@ -83,7 +166,6 @@ class SFFM(eqx.Module):
     mix: nn.Linear
     ln: nn.LayerNorm
     ln2: nn.LayerNorm
-    drop: nn.Dropout
 
     def __init__(
         self,
@@ -110,8 +192,7 @@ class SFFM(eqx.Module):
         ])
         )
         self.ln = eqx.filter_vmap(nn.LayerNorm((input_size,), use_weight=False, use_bias=False))
-        self.ln2 = eqx.filter_vmap(nn.LayerNorm((context_size * trace_size,), use_weight=False, use_bias=False))
-        self.drop = nn.Dropout(0.05)
+        self.ln2 = eqx.filter_vmap(nn.LayerNorm((2 * context_size * trace_size,), use_weight=False, use_bias=False))
 
     def initial_state(self, shape=tuple()):
         return jnp.zeros((*shape, 1, self.trace_size, self.context_size), dtype=jnp.complex64)
@@ -119,11 +200,12 @@ class SFFM(eqx.Module):
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
-        pre = self.pre(x)
+        pre = jnp.abs(self.pre(x))
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
         s = state.reshape(state.shape[0], -1)
-        scaled = self.ln2(s)
-        z = self.mix(jnp.concatenate([scaled.real, scaled.imag], axis=-1))
+        s = jnp.concatenate([s.real, s.imag], axis=-1)
+        scaled = symlog(s)
+        z = self.mix(scaled)
         final_state = state[-1:]
         return self.ln(z + x), final_state
 

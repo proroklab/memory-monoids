@@ -22,13 +22,13 @@ import yaml
 
 from modules import epsilon_greedy_policy, anneal, boltzmann_policy, mean_noise
 from memory.gru import GRU
-from memory.sffm import SFFM, DSFFM
+from memory.sffm import SFFM, DSFFM, NSFFM
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
 from utils import load_popgym_env, scale_by_norm
 from losses import tape_ddqn_loss, online_tape_q_loss
 
-model_map = {GRU.name: GRU, SFFM.name: SFFM, DSFFM.name: DSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
+model_map = {GRU.name: GRU, SFFM.name: SFFM, DSFFM.name: DSFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
@@ -71,7 +71,8 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
 
 opt = optax.chain(
     optax.clip_by_global_norm(config["train"]["gradient_scale"]),
-    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"], eps=1e-6),
+    #optax.adabelief(lr_schedule, eps=1e-6)
+    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"])
 )
 
 

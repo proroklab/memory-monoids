@@ -5,7 +5,7 @@ import equinox as eqx
 from equinox import nn
 
 import memory.ffa as ffa
-from modules import symlog, complex_symlog, gaussian, leaky_relu, linear_softplus, mish, smooth_leaky_relu, soft_relglu
+from modules import symlog, complex_symlog, gaussian, leaky_relu, linear_softplus, mish, smooth_leaky_relu, soft_relglu, gelu
 
 
 class NormalizedLinear(eqx.Module):
@@ -184,10 +184,10 @@ class SFFM(eqx.Module):
         self.mix = eqx.filter_vmap(nn.Sequential([
             nn.Linear(2 * trace_size * context_size, input_size, key=k5),
             nn.LayerNorm((input_size,), use_weight=False, use_bias=False),
-            mish,
+            leaky_relu,
             nn.Linear(input_size, input_size, key=k6),
             nn.LayerNorm((input_size,), use_weight=False, use_bias=False),
-            mish,
+            leaky_relu,
             nn.Linear(input_size, input_size, key=k7)
         ])
         )
@@ -202,9 +202,8 @@ class SFFM(eqx.Module):
     ) -> Tuple[jax.Array, jax.Array]:
         pre = jnp.abs(self.pre(x))
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
-        s = state.reshape(state.shape[0], -1)
-        s = jnp.concatenate([s.real, s.imag], axis=-1)
-        scaled = symlog(s)
+        s = jnp.concatenate([state.real, state.imag], axis=-1).reshape(state.shape[0], self.context_size * self.trace_size * 2)
+        scaled = symlog(s) 
         z = self.mix(scaled)
         final_state = state[-1:]
         return self.ln(z + x), final_state

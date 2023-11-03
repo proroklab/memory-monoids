@@ -71,8 +71,7 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
 
 opt = optax.chain(
     optax.clip_by_global_norm(config["train"]["gradient_scale"]),
-    #optax.adabelief(lr_schedule, eps=1e-6)
-    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"])
+    optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"], eps=config["train"]["adam_eps"])
 )
 
 

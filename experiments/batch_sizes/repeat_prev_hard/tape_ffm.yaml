@@ -3,7 +3,7 @@ seed: 0
 collect:
   env: "popgym.envs.RepeatPreviousHard"
   popgym_env: True
-  epochs: 6_000
+  epochs: 8_000
   random_epochs: 12_000
   eps_start: 0.2
   eps_end: 0.05
@@ -13,10 +13,11 @@ train:
   batch_size: 10_000
   gamma: 0.5
   target_delay: 200 # In epochs/updates
-  lr: 0.0003
+  lr: 0.0005
+  adam_eps: 1.0e-8
   gradient_scale: 0.01
   warmup_epochs: 100
-  weight_decay: 0.001
+  weight_decay: 0.000
   train_ratio: 1
 
 buffer:

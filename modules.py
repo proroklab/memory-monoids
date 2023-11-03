@@ -32,6 +32,12 @@ def mish(x, key=None):
 def leaky_relu(x, key=None):
     return jax.nn.leaky_relu(x)
 
+def gelu(x, key=None):
+    return jax.nn.gelu(x)
+
+def elu(x, key=None):
+    return jax.nn.elu(x)
+
 def smooth_leaky_relu(x, key=None):
     b = 0.05
     return (x < 0) * (jnp.exp((1 - b) * x) + b * x - 1.0) + (x >= 0) * x
@@ -39,15 +45,6 @@ def smooth_leaky_relu(x, key=None):
 
 def gaussian(x, key=None):
     return jnp.exp(-x ** 2)
-
-
-# @jax.jit
-# def mish(x, key=None):
-#     #return x * jnp.pi / (jnp.pi + jnp.exp(-x)) 
-#     #return x / (1 + jnp.exp(-x)) 
-#     #return x / (1 + jnp.abs(x))
-#     #return x - jnp.tanh(x)
-#     return jnp.sign(x) * jnp.log(1 + jnp.exp(jnp.abs(x)))
 
 
 class RandomSequential(nn.Sequential):
@@ -59,11 +56,9 @@ class Block(eqx.Module):
     def __init__(self, input_size, output_size, dropout, key):
         self.net = RandomSequential([
             ortho_linear(key, input_size, output_size), 
+            nn.LayerNorm(output_size, use_weight=False, use_bias=False),
             nn.Dropout(dropout),
-            nn.LayerNorm(output_size),
-            mish,
-            #gaussian
-            #smooth_leaky_relu,
+            leaky_relu,
         ])
 
     def __call__(self, x, key=None):

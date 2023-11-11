@@ -30,7 +30,7 @@ def mish(x, key=None):
     return x * jnp.tanh(jax.nn.softplus(x))
 
 def leaky_relu(x, key=None):
-    return jax.nn.leaky_relu(x)
+    return jax.nn.leaky_relu(x, negative_slope=0.01)
 
 def gelu(x, key=None):
     return jax.nn.gelu(x)
@@ -54,57 +54,52 @@ class RandomSequential(nn.Sequential):
 class Block(eqx.Module):
     net: eqx.Module
     def __init__(self, input_size, output_size, dropout, key):
-        self.net = RandomSequential([
-            ortho_linear(key, input_size, output_size), 
-            nn.LayerNorm(output_size, use_weight=False, use_bias=False),
-            nn.Dropout(dropout),
-            leaky_relu,
-        ])
+        if dropout == 0.0:
+            self.net = RandomSequential([
+                ortho_linear(key, input_size, output_size), 
+                nn.LayerNorm(output_size, use_weight=False, use_bias=False),
+                leaky_relu,
+            ])
+        else:
+            self.net = RandomSequential([
+                ortho_linear(key, input_size, output_size), 
+                nn.LayerNorm(output_size, use_weight=False, use_bias=False),
+                nn.Dropout(dropout),
+                leaky_relu,
+            ])
 
     def __call__(self, x, key=None):
         return self.net(x, key=key)
 
-
-class RecurrentQNetwork(eqx.Module):
-    input_size: int
-    output_size: int
-    config: Dict[str, Any]
-    pre: eqx.Module
-    memory: eqx.Module
+class QHead(eqx.Module):
     post0: eqx.Module
     post1: eqx.Module
     value: eqx.Module
     advantage: eqx.Module
     scale: eqx.Module
 
-    def __init__(self, obs_shape, act_shape, memory_module, config, key):
-        self.config = config
-        self.input_size = obs_shape
-        self.output_size = act_shape
-        keys = random.split(key, 7)
-        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], config["dropout"], keys[1]))
-        self.memory = memory_module
-        self.post0 = eqx.filter_vmap(Block(config["recurrent_size"], config["mlp_size"], config["dropout"], keys[2]))
-        self.post1 = eqx.filter_vmap(Block(config["mlp_size"], config["mlp_size"], config["dropout"], keys[3]))
+    def __init__(self, input_size, hidden_size, output_size, dropout, key):
+        keys = random.split(key, 5)
 
-        value = final_linear(keys[4], self.config["mlp_size"], 1, scale=0.01)
+        self.post0 = eqx.filter_vmap(Block(input_size, hidden_size, dropout, keys[0]))
+        self.post1 = eqx.filter_vmap(Block(hidden_size, hidden_size, dropout, keys[1]))
+
+        value = final_linear(keys[2], input_size, 1, scale=0.01)
         self.value = eqx.filter_vmap(value)
-        advantage = ortho_linear(keys[5], self.config["mlp_size"], self.output_size)
+        advantage = ortho_linear(keys[3], input_size, output_size)
         self.advantage = eqx.filter_vmap(advantage)
-        scale = final_linear(keys[6], self.config["mlp_size"], 1, scale=0.01)
+        scale = final_linear(keys[4], input_size, 1, scale=0.01)
         self.scale = eqx.filter_vmap(scale)
 
-    def __call__(self, x, state, start, done, key):
+    def __call__(self, x, key):
         T = x.shape[0]
-        net_keys = random.split(key, 3 * T)
-        x = self.pre(x, net_keys[:T])
-        y, final_state = self.memory(x=x, state=state, start=start, next_done=done, key=key)
-        y = self.post0(y, net_keys[T:2*T])
-        y = self.post1(y, net_keys[2*T:])
-
-        value = self.value(y)
-        A = self.advantage(y)
-        scale = self.scale(y)
+        net_keys = random.split(key, 2 * T)
+        x = self.post0(x, net_keys[:T])
+        x = self.post1(x, net_keys[T:2*T])
+    
+        value = self.value(x)
+        A = self.advantage(x)
+        scale = self.scale(x)
 
         A_normed = A / (1e-6 + jnp.linalg.norm(A, axis=-1, keepdims=True))
         A_normed = A / A.max(axis=-1, keepdims=True) 
@@ -112,7 +107,53 @@ class RecurrentQNetwork(eqx.Module):
         # TODO: Only use target network for advantage branch
         # Let value/scale increase as needed
         q = value + scale * advantage
+        return q
+        
+
+class RecurrentQNetwork(eqx.Module):
+    input_size: int
+    output_size: int
+    config: Dict[str, Any]
+    pre: eqx.Module
+    memory: eqx.Module
+    q: eqx.Module
+
+    def __init__(self, obs_shape, act_shape, memory_module, config, key):
+        self.config = config
+        self.input_size = obs_shape
+        self.output_size = act_shape
+        keys = random.split(key, 4)
+        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], config["dropout"], keys[1]))
+        self.memory = memory_module
+
+        ensemble_keys = random.split(keys[0], config["ensemble_size"])
+
+        @eqx.filter_vmap
+        def make_heads(key):
+            return QHead(config["recurrent_size"], config["mlp_size"], act_shape, config["dropout"], key)
+                    
+        self.q = make_heads(ensemble_keys)
+
+
+    def __call__(self, x, state, start, done, key):
+        T = x.shape[0]
+        net_keys = random.split(key, T + 1)
+        x = self.pre(x, net_keys[:T])
+        y, final_state = self.memory(x=x, state=state, start=start, next_done=done, key=key)
+
+        @eqx.filter_vmap(in_axes=(eqx.if_array(0), None, None))
+        def ensemble(model, x, key):
+            return model(x, key=key)
+
+            
+        q = ensemble(self.q, y, net_keys[-1])
+        subsample = random.choice(key, q, (5,))
+        #q = jnp.median(q, axis=0)
         return q, final_state
+
+    def evaluate(self, x, state, start, done, key):
+        q = self(x, state, start, done, key)
+        return jnp.median(q, axis=0)
 
     def initial_state(self, shape=tuple()):
         return self.memory.initial_state(shape)
@@ -212,7 +253,8 @@ def greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
     q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=key)
-    action = jnp.argmax(q_values)
+    #action = jnp.argmax(q_values.min(0))
+    action = jnp.argmax(jnp.median(q_values, axis=0))
     return action, state
 
 def boltzmann_policy(
@@ -257,3 +299,14 @@ def soft_update(network, target, tau):
     updated_params = jax.tree_map(polyak, params, target_params)
     target = eqx.combine(static, updated_params)
     return target
+
+def shrink_perturb_soft_update(network, target, random, tau1, tau2=1/400):
+    def polyak(param, target_param, rand_param):
+        return target_param * (1 - tau1 - tau2) + param * tau1 + random * tau2
+
+    params, _ = eqx.partition(network, eqx.is_inexact_array)
+    target_params, static = eqx.partition(target, eqx.is_inexact_array)
+    updated_params = jax.tree_map(polyak, params, target_params)
+    target = eqx.combine(static, updated_params)
+    return target
+

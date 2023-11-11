@@ -13,6 +13,12 @@ def huber(x):
         jnp.abs(x) - 0.5 
     )
 
+def cauchy(x):
+    return jnp.log(1 + x ** 2)
+
+def cauchy_abs(x):
+    return jnp.log(1 + jnp.abs(x))
+
 def masked_mean(x, mask):
     return jnp.sum(x * mask) / mask.sum()
 
@@ -99,6 +105,33 @@ def tape_constrained_q_loss(q_network, tape, gamma, key):
     return g_cons, (jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1))
 
 
+@partial(eqx.filter_value_and_grad, has_aux=True)
+def online_tape_redq_loss(q_network, q_target, tape, gamma, ensemble_subset_size, key):
+    B = tape["next_reward"].shape[0]
+    batch_idx = jnp.arange(B)
+    initial_state = q_network.initial_state()
+    q_values, _ = q_network(
+        tape["observation"], initial_state, tape["start"], tape["next_done"], key=key
+    )
+    batch_index = jnp.arange(B)
+    selected_q = q_values[:, batch_index, tape["action"]]
+
+    _, k = jax.random.split(key, 2)
+    next_q_target, _ = jax.lax.stop_gradient(q_target(
+        tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
+    ))
+    next_q = jnp.median(jax.random.choice(k, next_q_target, (ensemble_subset_size,), replace=False).max(-1), axis=0)
+
+    done = jnp.logical_or(tape['next_terminated'], tape['next_truncated'])
+    target = tape["next_reward"] + (1.0 - done) * gamma * next_q 
+    error = selected_q - jnp.expand_dims(target, 0)
+    error_min, error_max = jnp.min(error), jnp.max(error)
+    loss = huber(error)
+    loss = loss.mean()
+    q_mean = jnp.mean(q_values)
+    target_mean = jnp.mean(target)
+    target_network_mean = jnp.mean(next_q)
+    return loss, (q_mean, target_mean, target_network_mean, error_min, error_max)
 
 @partial(eqx.filter_value_and_grad, has_aux=True)
 def online_tape_q_loss(q_network, q_target, tape, gamma, key):
@@ -112,27 +145,30 @@ def online_tape_q_loss(q_network, q_target, tape, gamma, key):
     selected_q = q_values[batch_index, tape["action"]]
 
     _, k0, k1 = jax.random.split(key, 3)
-#    noise0 = jax.random.normal(key, shape=tape["next_observation"].shape) * 0.001
-#    noise1 = jax.random.normal(key, shape=tape["next_observation"].shape) * 0.001
-    next_q_action_idx, _ = q_network(
-        tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
-    )
+#    next_q_action_idx, _ = q_network(
+#        tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
+#    )
+    #noise = jax.random.normal(key, shape=tape["next_observation"].shape) * 0.001
     next_q_target, _ = jax.lax.stop_gradient(q_target(
         tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
     ))
-    #next_q = jax.lax.stop_gradient(jnp.minimum(next_q_target, next_q_action_idx)[batch_idx, next_q_action_idx.argmax(-1).flatten()] )
-#    diff = huber(next_q_action_idx - next_q_target)
-#    diff = diff / (1e-6 + jnp.max(diff))
-#    next_q = jax.lax.stop_gradient((diff * next_q_target + (1.0 - diff) * next_q_action_idx)[batch_idx, next_q_action_idx.argmax(-1).flatten()])
-    next_q = jax.lax.stop_gradient(next_q_target[batch_idx, next_q_action_idx.argmax(-1).flatten()])
+    #next_q = jax.lax.stop_gradient(next_q_target[batch_idx, next_q_action_idx.argmax(-1).flatten()])
+    next_q = next_q_target.max(-1)
 
-    target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
+    done = jnp.logical_or(tape['next_terminated'], tape['next_truncated'])
+    #target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
+    target = tape["next_reward"] + (1.0 - done) * gamma * next_q 
     error = selected_q - target
     # Objective should be softmax(difference) to prevent a single q from exploding
     # Clip large positive errors
-    #error = jnp.clip(error, a_max=2 * error.std())
+    #error = jnp.clip(error, a_max=error.mean() + 2 * error.std(), a_min=error.mean()  2 * error.std())
     error_min, error_max = jnp.min(error), jnp.max(error)
     loss = huber(error)
+    #loss = cauchy(error)
+    #loss = jnp.clip(loss, a_max=loss.mean() + 2 * loss.std())
+    #clip_mask = (loss < (loss.mean() + 2 * loss.std()))
+    #clip_mask = (loss < (loss.mean() + 2 * loss.std())) + done
+    #loss = loss * clip_mask #+ (1.0 - clip_mask) * jnp.log(1 + jnp.abs(selected_q))
     #constraint = 0.05 * jax.nn.logsumexp(loss - jnp.log(B))
     # Mean is across action dim
     #constraint = jax.nn.logsumexp(huber(next_q_action_idx - next_q_target) - jnp.log(B))

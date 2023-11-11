@@ -153,6 +153,12 @@ class DualAttention(eqx.Module):
         c_attn = jnp.einsum("btc, bc -> bt", state, c)
         return jnp.concatenate([a_attn, c_attn], axis=-1)
 
+
+class DynamicLN(eqx.Module):
+    def __call__(self, x, key=None):
+        x = x - x.mean(axis=(-2,-1))
+        std = jnp.clip(x.std(), a_min=1e-6, a_max=1.0)
+        return x / std
         
 
 class SFFM(eqx.Module):
@@ -162,10 +168,10 @@ class SFFM(eqx.Module):
     name: str = "SFFM"
 
     ffa_params: Tuple[jax.Array, jax.Array]
-    pre: nn.Linear
+    W_trace: nn.Linear
+    W_context: nn.Linear
     mix: nn.Linear
     ln: nn.LayerNorm
-    ln2: nn.LayerNorm
 
     def __init__(
         self,
@@ -179,7 +185,8 @@ class SFFM(eqx.Module):
         self.context_size = context_size
 
         _, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(key, 9)
-        self.pre = eqx.filter_vmap(nn.Linear(input_size, trace_size, key=k1))
+        self.W_trace = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k1))
+        self.W_context = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k8))
         self.ffa_params = ffa.init(trace_size, context_size, k2)
         self.mix = eqx.filter_vmap(nn.Sequential([
             nn.Linear(2 * trace_size * context_size, input_size, key=k5),
@@ -192,7 +199,6 @@ class SFFM(eqx.Module):
         ])
         )
         self.ln = eqx.filter_vmap(nn.LayerNorm((input_size,), use_weight=False, use_bias=False))
-        self.ln2 = eqx.filter_vmap(nn.LayerNorm((2 * context_size * trace_size,), use_weight=False, use_bias=False))
 
     def initial_state(self, shape=tuple()):
         return jnp.zeros((*shape, 1, self.trace_size, self.context_size), dtype=jnp.complex64)
@@ -200,10 +206,14 @@ class SFFM(eqx.Module):
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
-        pre = jnp.abs(self.pre(x))
+        pre = jnp.abs(jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x)))
+        pre = pre / jnp.linalg.norm(pre, axis=(-2, -1), keepdims=True, ord='fro')
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
-        s = jnp.concatenate([state.real, state.imag], axis=-1).reshape(state.shape[0], self.context_size * self.trace_size * 2)
-        scaled = symlog(s) 
+        s = state.reshape(state.shape[0], self.context_size * self.trace_size)
+        scaled = jnp.concatenate([
+            jnp.log(1 + jnp.abs(s)) * jnp.sin(jnp.angle(s)),
+            jnp.log(1 + jnp.abs(s)) * jnp.cos(jnp.angle(s)),
+        ], axis=-1)
         z = self.mix(scaled)
         final_state = state[-1:]
         return self.ln(z + x), final_state

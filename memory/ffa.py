@@ -10,7 +10,7 @@ def init(
     memory_size: int, context_size: int, key, min_period: int = 1, max_period: int = 10_000 
 ) -> Tuple[jax.Array, jax.Array]:
     _, k1, k2 = jax.random.split(key, 3)
-    a_low = -0.5
+    a_low = -0.1
     a_high = -1e-6
     a = jax.random.uniform(k1, (memory_size,), minval=a_low, maxval=a_high)
     b = 2 * jnp.pi / jnp.exp(jax.random.uniform(k2, (context_size,), minval=jnp.log(min_period), maxval=jnp.log(max_period)))
@@ -87,9 +87,9 @@ def apply(
     memory_size, context_size = len(params[0]), len(params[1])
     timestep = jnp.arange(T + 1, dtype=jnp.int32)
     # Add context dim
-    x = jnp.repeat(
-        jnp.expand_dims(x, axis=-1).astype(jnp.complex64), context_size, axis=-1
-    )
+#    x = jnp.repeat(
+#        jnp.expand_dims(x, axis=-1).astype(jnp.complex64), context_size, axis=-1
+#    )
     start = start.reshape(T, 1, 1)
     next_done = next_done.reshape(T, 1, 1)
 

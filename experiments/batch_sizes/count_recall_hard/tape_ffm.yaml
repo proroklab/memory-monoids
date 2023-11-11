@@ -1,34 +1,34 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.RepeatPreviousHard"
+  env: "popgym.envs.CountRecallHard"
   popgym_env: True
-  epochs: 8_000
-  random_epochs: 12_000
+  epochs: 30_000
+  random_epochs: 50_000
   eps_start: 0.2
   eps_end: 0.05
   propagate_state: True
   ratio: 1
 
 train:
-  batch_size: 10_000
-  gamma: 0.5
+  batch_size: 20_000
+  gamma: 0.95
   target_delay: 200 # In epochs/updates
   lr: 0.0005
   adam_eps: 1.0e-8
-  gradient_scale: 0.01
+  gradient_scale: 0.05
   warmup_epochs: 100
   weight_decay: 0.000
   train_ratio: 1
 
 buffer:
-  size: 5_000_000 # In timesteps 
+  size: 50_000_000 # In timesteps 
   swap_iters: "auto" # sqrt(batch_size) auto
 
 model:
   mlp_size: 256
   recurrent_size: 256
-  dropout: 0.00
+  dropout: 0.000
   ensemble_size: 1
   ensemble_subset: 1
   memory_name: "NSFFM"

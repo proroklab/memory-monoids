@@ -26,7 +26,7 @@ from memory.sffm import SFFM, DSFFM, NSFFM
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
 from utils import load_popgym_env, scale_by_norm
-from losses import tape_ddqn_loss, online_tape_q_loss
+from losses import tape_ddqn_loss, online_tape_q_loss, online_tape_redq_loss
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, DSFFM.name: DSFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
 
@@ -37,6 +37,7 @@ a.add_argument("--debug", "-d", action="store_true")
 a.add_argument("--wandb", "-w", action="store_true")
 a.add_argument('--name', '-n', type=str, default=None)
 a.add_argument('--project', '-p', type=str, default="jax_dqn")
+a.add_argument('--load', '-l', type=str, default=None)
 args = a.parse_args()
 
 with open(args.config) as f:
@@ -124,28 +125,31 @@ for epoch in range(1, epochs + 1):
     progress = max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
     )
-    key, epoch_key, sample_key, loss_key = random.split(key, 4)
-    (
-        transitions,
-        cumulative_reward,
-        best_ep_reward
-    ) = collector(q_network, eqx.filter_jit(epsilon_greedy_policy), jnp.array(progress), epoch_key, False)
+    for _ in range(config["collect"]["ratio"]):
+        key, epoch_key, sample_key, loss_key = random.split(key, 4)
+        (
+            transitions,
+            cumulative_reward,
+            best_ep_reward
+        ) = collector(q_network, eqx.filter_jit(epsilon_greedy_policy), jnp.array(progress), epoch_key, False)
 
-    rb.add(epoch_key, **transitions)
-    rb.on_episode_end()
-    transitions_collected += len(transitions['next_reward'])
+        rb.add(epoch_key, **transitions)
+        rb.on_episode_end()
+        if epoch <= config["collect"]["random_epochs"]:
+            break
 
     if epoch <= config["collect"]["random_epochs"]:
         continue
+    transitions_collected += len(transitions['next_reward'])
 
 
     for _ in range(config["train"]["train_ratio"]):
         _, sample_key = random.split(sample_key)
         data = rb.sample(config["train"]["batch_size"], sample_key)
-        transitions_trained += len(transitions['next_reward'])
+        transitions_trained += len(data['next_reward'])
 
-        outputs, gradient = eqx.filter_jit(online_tape_q_loss)(
-            q_network, q_target, data, config["train"]["gamma"], loss_key
+        outputs, gradient = eqx.filter_jit(online_tape_redq_loss)(
+            q_network, q_target, data, config["train"]["gamma"], config["model"]["ensemble_subset"], loss_key
         )
         loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
         updates, opt_state = eqx.filter_jit(opt.update)(
@@ -195,6 +199,7 @@ for epoch in range(1, epochs + 1):
         "train/time_total": total_train_time,
         "train/error_min": error_min,
         "train/error_max": error_max,
+        "train/utd": transitions_trained / transitions_collected
     }
     to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
     if args.wandb:

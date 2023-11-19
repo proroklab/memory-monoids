@@ -123,7 +123,7 @@ class RecurrentQNetwork(eqx.Module):
         self.input_size = obs_shape
         self.output_size = act_shape
         keys = random.split(key, 4)
-        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], config["dropout"], keys[1]))
+        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], 0, keys[1]))
         self.memory = memory_module
 
         ensemble_keys = random.split(keys[0], config["ensemble_size"])
@@ -182,6 +182,14 @@ def ortho_init(key, linear, scale):
     linear = eqx.tree_at(lambda l: l.weight, linear, init(key, linear.weight.shape))
     linear = eqx.tree_at(lambda l: l.bias, linear, jnp.zeros_like(linear.bias))
     return linear
+
+def default_init(key, linear, scale=1.0, zero_bias=False):
+    lim = math.sqrt(scale / linear.in_features)
+    linear = eqx.tree_at(lambda l: l.weight, linear, jax.random.uniform(key, linear.weight.shape, minval=-lim, maxval=lim))
+    if zero_bias:
+        linear = eqx.tree_at(lambda l: l.bias, linear, jnp.zeros_like(linear.bias))
+    return linear
+
 
 def ortho_linear(key, input_size, output_size, scale=2 ** 0.5):
     return ortho_init(key, eqx.nn.Linear(input_size, output_size, key=key), scale=scale)
@@ -254,16 +262,32 @@ def greedy_policy(
 ):
     q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=key)
     #action = jnp.argmax(q_values.min(0))
-    action = jnp.argmax(jnp.median(q_values, axis=0))
+    #action = jnp.argmax(jnp.median(q_values, axis=0))
+    ensemble_reduced = jax.random.choice(key, q_values, tuple(), axis=0)
+    action = jnp.argmax(ensemble_reduced)
     return action, state
 
 def boltzmann_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
     _, q_key, s_key  = random.split(key, 3)
-    temp = anneal(epsilon_start, epsilon_end, progress)
+    #temp = anneal(epsilon_start, epsilon_end, progress)
     q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=q_key)
-    action = jax.random.categorical(s_key, q_values / temp, axis=-1).squeeze(-1)
+    ensemble_reduced = jax.random.choice(key, q_values, tuple(), axis=0)
+    divisor = 1e-6 + ensemble_reduced.std()
+    temp = anneal(epsilon_start, epsilon_end, progress)
+    action = jax.random.categorical(s_key, ensemble_reduced / divisor * temp, axis=-1).squeeze(-1)
+    return action, state
+
+def sum_policy(
+    q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
+):
+    e_key, q_key, s_key  = random.split(key, 3)
+    q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=q_key)
+    #action = jax.random.categorical(s_key, q_values / temp, axis=-1).squeeze(-1)
+    ensemble_reduced_q = jax.random.choice(e_key, q_values, tuple(), axis=0)
+    probs = ensemble_reduced_q / jnp.sum(ensemble_reduced_q, keepdims=True)
+    action = jax.random.choice(s_key, jnp.arange(q_values.shape[-1]), (1,), p=probs, axis=-1)
     return action, state
 
 def epsilon_greedy_policy(
@@ -298,6 +322,7 @@ def soft_update(network, target, tau):
     target_params, static = eqx.partition(target, eqx.is_inexact_array)
     updated_params = jax.tree_map(polyak, params, target_params)
     target = eqx.combine(static, updated_params)
+    target = eqx.tree_inference(target, True)
     return target
 
 def shrink_perturb_soft_update(network, target, random, tau1, tau2=1/400):

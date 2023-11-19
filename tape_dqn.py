@@ -44,7 +44,8 @@ with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 if args.debug:
-    config["collect"]["random_epochs"] = 500
+    config["collect"]["random_epochs"] = 10
+    config["train"]["batch_size"] = 10
     jax.config.update('jax_disable_jit', True)
 
 if args.seed is not None:
@@ -67,8 +68,14 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
     init_value=0,
     peak_value=config["train"]["lr"], 
     warmup_steps=config["train"]["warmup_epochs"],
-    decay_steps=config['collect']['epochs'],
+    decay_steps=config['collect']['epochs'] * config["train"]["train_ratio"],
+    #end_value=0.5 * config["train"]["lr"]
 )
+# lr_schedule = optax.linear_schedule(
+#     init_value=0,
+#     end_value=config["train"]["lr"], 
+#     transition_steps=config["train"]["warmup_epochs"] * config["train"]["train_ratio"],
+# )
 
 opt = optax.chain(
     optax.clip_by_global_norm(config["train"]["gradient_scale"]),
@@ -118,13 +125,15 @@ transitions_trained = 0
 total_train_time = 0
 train_elapsed = 0
 total_train_time = 0
+gamma = jnp.array(config["train"]["gamma"])
 for epoch in range(1, epochs + 1):
     if epoch > 1:
         train_start = time.time()
     pbar.update()
-    progress = max(
+    progress = jnp.array(max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
-    )
+    ))
+    #gamma = jnp.array(config["train"]["gamma"]) * progress
     for _ in range(config["collect"]["ratio"]):
         key, epoch_key, sample_key, loss_key = random.split(key, 4)
         (
@@ -137,10 +146,10 @@ for epoch in range(1, epochs + 1):
         rb.on_episode_end()
         if epoch <= config["collect"]["random_epochs"]:
             break
+        transitions_collected += len(transitions['next_reward'])
 
     if epoch <= config["collect"]["random_epochs"]:
         continue
-    transitions_collected += len(transitions['next_reward'])
 
 
     for _ in range(config["train"]["train_ratio"]):
@@ -149,20 +158,20 @@ for epoch in range(1, epochs + 1):
         transitions_trained += len(data['next_reward'])
 
         outputs, gradient = eqx.filter_jit(online_tape_redq_loss)(
-            q_network, q_target, data, config["train"]["gamma"], config["model"]["ensemble_subset"], loss_key
+            q_network, q_target, data, gamma, config["model"]["ensemble_subset"], progress, loss_key
         )
         loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
         updates, opt_state = eqx.filter_jit(opt.update)(
             gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
         )
         q_network = eqx.filter_jit(eqx.apply_updates)(q_network, updates)
-        q_target = eqx.tree_inference(soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"]), True)
+        q_target = eqx.filter_jit(soft_update)(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
     if epoch > 1:
         train_elapsed = time.time() - train_start
         total_train_time += train_elapsed
     # Eval
-    q_eval = eqx.tree_inference(q_network, True)
+    q_eval = eqx.filter_jit(eqx.tree_inference)(q_network, True)
     if epoch % config["eval"]["interval"] == 0:
         eval_keys = random.split(eval_key, config["eval"]["episodes"])
         eval_rewards = []
@@ -175,35 +184,42 @@ for epoch in range(1, epochs + 1):
         if eval_ep_reward > best_eval_ep_reward:
             best_eval_ep_reward = eval_ep_reward
 
-    to_log = {
-        "collect/epoch": epoch,
-        "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),
-        "collect/reward": cumulative_reward,
-        "collect/best_reward": best_ep_reward,
-        "collect/buffer_capacity": rb.get_stored_size()
-        / config["buffer"]["size"],
-        "collect/buffer_density": rb.get_density(),
-        "collect/transitions": transitions_collected,
-        "eval/collect/reward": eval_ep_reward,
-        "eval/collect/best_reward": best_eval_ep_reward,
-        "train/loss": loss,
-        "train/epsilon": anneal(
-            config["collect"]["eps_start"], config["collect"]["eps_end"], progress
-        ),
-        "train/q_mean": q_mean,
-        "train/target_mean": target_mean,
-        "train/target_network_mean": target_network_mean,
-        "train/transitions": transitions_trained,
-        "train/grad_global_norm": optax.global_norm(gradient),
-        "train/time_this_epoch": train_elapsed,
-        "train/time_total": total_train_time,
-        "train/error_min": error_min,
-        "train/error_max": error_max,
-        "train/utd": transitions_trained / transitions_collected
-    }
-    to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
+
     if args.wandb:
+#        action_hist = np.histogram(transitions["action"], bins=np.arange(act_shape + 1))
+#        action_hist = wandb.Histogram(np_histogram=action_hist)
+
+        to_log = {
+            "collect/epoch": epoch,
+            #"collect/action_hist": action_hist,
+            "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),
+            "collect/reward": cumulative_reward,
+            "collect/best_reward": best_ep_reward,
+            "collect/buffer_capacity": rb.get_stored_size()
+            / config["buffer"]["size"],
+            "collect/buffer_density": rb.get_density(),
+            "collect/transitions": transitions_collected,
+            "eval/collect/reward": eval_ep_reward,
+            "eval/collect/best_reward": best_eval_ep_reward,
+            "train/loss": loss,
+            "train/epsilon": anneal(
+                config["collect"]["eps_start"], config["collect"]["eps_end"], progress
+            ),
+            "train/progress": progress,
+            "train/q_mean": q_mean,
+            "train/target_mean": target_mean,
+            "train/target_network_mean": target_network_mean,
+            "train/transitions": transitions_trained,
+            "train/grad_global_norm": optax.global_norm(gradient),
+            "train/time_this_epoch": train_elapsed,
+            "train/time_total": total_train_time,
+            "train/error_min": error_min,
+            "train/error_max": error_max,
+            "train/utd": transitions_trained / transitions_collected,
+            "train/gamma": gamma,
+        }
         wandb.log(to_log)
+    #to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
 
     pbar.set_description(
         f"eval: {eval_ep_reward:.2f}, {best_eval_ep_reward:.2f} "

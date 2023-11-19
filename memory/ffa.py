@@ -10,8 +10,8 @@ def init(
     memory_size: int, context_size: int, key, min_period: int = 1, max_period: int = 10_000 
 ) -> Tuple[jax.Array, jax.Array]:
     _, k1, k2 = jax.random.split(key, 3)
-    a_low = -0.1
-    a_high = -1e-6
+    a_low = 1e-6
+    a_high = 0.1
     a = jax.random.uniform(k1, (memory_size,), minval=a_low, maxval=a_high)
     b = 2 * jnp.pi / jnp.exp(jax.random.uniform(k2, (context_size,), minval=jnp.log(min_period), maxval=jnp.log(max_period)))
     return a, b
@@ -26,8 +26,9 @@ def initial_state(params: Tuple[jax.Array, jax.Array]) -> jax.Array:
 def log_gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
     a, b = params
     memory_size, context_size = a.shape[-1], b.shape[-1]
-    a = jnp.clip(jnp.reshape(a, (t.shape[0], memory_size, 1)), a_max=0)
-    b = jnp.reshape(b, (t.shape[0], 1, context_size))
+    #a = jnp.clip(jnp.reshape(a, (t.shape[0], memory_size, 1)), a_max=0)
+    a = -jnp.abs(a).reshape((t.shape[0], memory_size, 1))
+    b = b.reshape(t.shape[0], 1, context_size)
     ab = jax.lax.complex(a, b)
     return ab * t.reshape(t.shape[0], 1, 1)
 

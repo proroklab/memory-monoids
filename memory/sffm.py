@@ -5,7 +5,7 @@ import equinox as eqx
 from equinox import nn
 
 import memory.ffa as ffa
-from modules import symlog, complex_symlog, gaussian, leaky_relu, linear_softplus, mish, smooth_leaky_relu, soft_relglu, gelu
+from modules import final_linear, ortho_linear, symlog, complex_symlog, gaussian, leaky_relu, linear_softplus, mish, smooth_leaky_relu, soft_relglu, gelu, RandomSequential, default_init
 
 
 class NormalizedLinear(eqx.Module):
@@ -64,10 +64,10 @@ class NSFFM(eqx.Module):
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
-        y = x
         for i, block in enumerate(self.sffm):
             key, k = jax.random.split(key)
-            y, s = block(y, state[i], start, next_done, key)
+            y, s = block(x, state[i], start, next_done, k)
+            x = x + y
             state[i] = s
         return y, state 
 
@@ -159,6 +159,15 @@ class DynamicLN(eqx.Module):
         x = x - x.mean(axis=(-2,-1))
         std = jnp.clip(x.std(), a_min=1e-6, a_max=1.0)
         return x / std
+
+class FroLinear(nn.Linear):
+    weight: jax.Array
+    bias: jax.Array
+
+    def __call__(self, x, key=None):
+        weight = self.weight / (1e-6 + jnp.linalg.norm(self.weight, ord='fro', keepdims=True))
+        return weight @ x + self.bias
+
         
 
 class SFFM(eqx.Module):
@@ -172,7 +181,6 @@ class SFFM(eqx.Module):
     W_context: nn.Linear
     mix: nn.Linear
     ln: nn.LayerNorm
-
     def __init__(
         self,
         input_size: int,
@@ -187,17 +195,29 @@ class SFFM(eqx.Module):
         _, k1, k2, k3, k4, k5, k6, k7, k8 = jax.random.split(key, 9)
         self.W_trace = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k1))
         self.W_context = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k8))
+        # self.W_trace = eqx.filter_vmap(
+        #     ortho_linear(k1, input_size, trace_size)
+        # )
+        # self.W_context = eqx.filter_vmap(
+        #     ortho_linear(k8, input_size, context_size)
+        # )
         self.ffa_params = ffa.init(trace_size, context_size, k2)
-        self.mix = eqx.filter_vmap(nn.Sequential([
-            nn.Linear(2 * trace_size * context_size, input_size, key=k5),
+        self.mix = eqx.filter_vmap(RandomSequential([
+            #nn.Linear(2 * trace_size * context_size, input_size, key=k5),
+            #final_linear(k5, 2 * trace_size * context_size, input_size, 0.001),
+            #ortho_linear(k5, 2 * trace_size * context_size, input_size),
+            default_init(k5, nn.Linear(2 * trace_size * context_size, input_size, key=k5), scale=1e-4, zero_bias=True),
             nn.LayerNorm((input_size,), use_weight=False, use_bias=False),
+            nn.Dropout(0.005),
             leaky_relu,
             nn.Linear(input_size, input_size, key=k6),
+            #ortho_linear(k6, input_size, input_size),
+            #nn.LayerNorm((input_size,)),
             nn.LayerNorm((input_size,), use_weight=False, use_bias=False),
+            nn.Dropout(0.005),
             leaky_relu,
-            nn.Linear(input_size, input_size, key=k7)
-        ])
-        )
+        ]))
+        #self.ln = eqx.filter_vmap(nn.LayerNorm((input_size,)))
         self.ln = eqx.filter_vmap(nn.LayerNorm((input_size,), use_weight=False, use_bias=False))
 
     def initial_state(self, shape=tuple()):
@@ -207,16 +227,17 @@ class SFFM(eqx.Module):
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
         pre = jnp.abs(jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x)))
-        pre = pre / jnp.linalg.norm(pre, axis=(-2, -1), keepdims=True, ord='fro')
+        pre = pre / (1e-6 + jnp.sum(pre, axis=(-2,-1), keepdims=True))
         state = ffa.apply(params=self.ffa_params, x=pre, state=state, start=start, next_done=next_done)
+        keys = jax.random.split(key, state.shape[0])
         s = state.reshape(state.shape[0], self.context_size * self.trace_size)
         scaled = jnp.concatenate([
             jnp.log(1 + jnp.abs(s)) * jnp.sin(jnp.angle(s)),
             jnp.log(1 + jnp.abs(s)) * jnp.cos(jnp.angle(s)),
         ], axis=-1)
-        z = self.mix(scaled)
+        z = self.mix(scaled, keys)
         final_state = state[-1:]
-        return self.ln(z + x), final_state
+        return z, final_state
 
 
 if __name__ == "__main__":

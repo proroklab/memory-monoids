@@ -35,7 +35,9 @@ def load_popgym_env(config, eval=False, popgym=True):
         instance = getattr(mod, cls)()
     else:
         instance = gym.make(config["collect"]["env"])
-    instance = Flatten(Antialias(PreviousAction(instance)))
+    if config["collect"]["env_prev_action"]:
+        instance = PreviousAction(instance)
+    instance = Flatten(Antialias(instance))
     if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
         instance = DiscreteAction(instance)
     instance.action_space.seed(config["seed"] + eval * 1000)

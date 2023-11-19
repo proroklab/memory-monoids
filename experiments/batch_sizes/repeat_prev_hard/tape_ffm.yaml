@@ -2,6 +2,7 @@ seed: 0
 
 collect:
   env: "popgym.envs.RepeatPreviousHard"
+  env_prev_action: False
   popgym_env: True
   epochs: 8_000
   random_epochs: 12_000
@@ -12,7 +13,8 @@ collect:
 
 train:
   batch_size: 10_000
-  gamma: 0.5
+  gamma: 
+    - 0.5
   target_delay: 200 # In epochs/updates
   lr: 0.0005
   adam_eps: 1.0e-8
@@ -28,7 +30,7 @@ buffer:
 model:
   mlp_size: 256
   recurrent_size: 256
-  dropout: 0.00
+  dropout: 0.01
   ensemble_size: 1
   ensemble_subset: 1
   memory_name: "NSFFM"

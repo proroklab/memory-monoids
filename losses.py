@@ -13,6 +13,14 @@ def huber(x):
         jnp.abs(x) - 0.5 
     )
 
+def gaussian_nll(x, logvar):
+    return 0.5 * (
+        logvar + x ** 2 / (1e-6 + jnp.exp(logvar))
+        
+        + x ** 2
+        / jnp.max(var, 1e-6)
+    )
+
 def cauchy(x):
     return jnp.log(1 + x ** 2)
 
@@ -104,9 +112,8 @@ def tape_constrained_q_loss(q_network, tape, gamma, key):
     g_cons = g1 - g_pi
     return g_cons, (jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1), jnp.zeros(1))
 
-
 @partial(eqx.filter_value_and_grad, has_aux=True)
-def online_tape_redq_loss(q_network, q_target, tape, gamma, ensemble_subset_size, key):
+def online_tape_q_nll_loss(q_network, q_target, tape, gamma, ensemble_subset_size, progress, key):
     B = tape["next_reward"].shape[0]
     batch_idx = jnp.arange(B)
     initial_state = q_network.initial_state()
@@ -116,15 +123,46 @@ def online_tape_redq_loss(q_network, q_target, tape, gamma, ensemble_subset_size
     batch_index = jnp.arange(B)
     selected_q = q_values[:, batch_index, tape["action"]]
 
-    _, k = jax.random.split(key, 2)
     next_q_target, _ = jax.lax.stop_gradient(q_target(
         tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
     ))
-    next_q = jnp.median(jax.random.choice(k, next_q_target, (ensemble_subset_size,), replace=False).max(-1), axis=0)
+    next_q = jnp.median(next_q_target, axis=0).max(-1)
+    #next_q = next_q_target.max(-1)
 
     done = jnp.logical_or(tape['next_terminated'], tape['next_truncated'])
+    #target = jnp.expand_dims(tape["next_reward"] + (1.0 - done), 0) * jnp.expand_dims(gamma, 1) * next_q 
     target = tape["next_reward"] + (1.0 - done) * gamma * next_q 
-    error = selected_q - jnp.expand_dims(target, 0)
+    error = selected_q - target
+    error_min, error_max = jnp.min(error), jnp.max(error)
+    loss = huber(error)
+    loss = loss.mean()
+    q_mean = jnp.mean(q_values)
+    target_mean = jnp.mean(target)
+    target_network_mean = jnp.mean(next_q)
+    return loss, (q_mean, target_mean, target_network_mean, error_min, error_max)
+
+@partial(eqx.filter_value_and_grad, has_aux=True)
+def online_tape_redq_loss(q_network, q_target, tape, gamma, ensemble_subset_size, progress, key):
+    B = tape["next_reward"].shape[0]
+    batch_idx = jnp.arange(B)
+    initial_state = q_network.initial_state()
+    q_values, _ = q_network(
+        tape["observation"], initial_state, tape["start"], tape["next_done"], key=key
+    )
+    batch_index = jnp.arange(B)
+    selected_q = q_values[:, batch_index, tape["action"]]
+
+    next_q_target, _ = jax.lax.stop_gradient(q_target(
+        tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
+    ))
+    _, k = jax.random.split(key, 2)
+    next_q = jnp.median(jax.random.choice(k, next_q_target, (ensemble_subset_size,), replace=False).max(-1), axis=0)
+    #next_q = next_q_target.max(-1)
+
+    done = jnp.logical_or(tape['next_terminated'], tape['next_truncated'])
+    #target = jnp.expand_dims(tape["next_reward"] + (1.0 - done), 0) * jnp.expand_dims(gamma, 1) * next_q 
+    target = tape["next_reward"] + (1.0 - done) * gamma * next_q 
+    error = selected_q - target
     error_min, error_max = jnp.min(error), jnp.max(error)
     loss = huber(error)
     loss = loss.mean()

@@ -3,18 +3,23 @@ seed: 0
 collect:
   env: "popgym.envs.PositionOnlyCartPoleEasy"
   popgym_env: True
+  env_prev_action: False
   epochs: 10_000
   random_epochs: 10_000
   eps_start: 0.05
   eps_end: 0.01
   propagate_state: True
+  ratio: 1
 
 train:
   batch_size: 30_000
-  gamma: 0.98
-  target_delay: 1 # In epochs/updates
-  lr: 0.0005
-  gradient_scale: 1.0 #0.01
+  gamma: 
+    - 0.5
+  target_delay: 200 # In epochs/updates
+  lr_start: 0.0005
+  lr_end: 0.0001
+  adam_eps: 1.0e-8
+  gradient_scale: 0.01
   warmup_epochs: 50
   weight_decay: 0.01
   train_ratio: 1
@@ -25,14 +30,17 @@ buffer:
 
 model:
   mlp_size: 64
-  recurrent_size: 128
+  recurrent_size: 64
   dropout: 0.00
-  memory_name: "SFFM"
+  ensemble_size: 1
+  ensemble_subset: 1
+  memory_name: "NSFFM"
   memory:
+    num_blocks: 1
     input_size: 64
     trace_size: 8
     context_size: 8
-    output_size: 128
+    dropout: 0.01
 
 eval:
   interval: 10

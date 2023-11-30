@@ -22,13 +22,14 @@ import yaml
 
 from modules import epsilon_greedy_policy, anneal, boltzmann_policy, mean_noise
 from memory.gru import GRU
-from memory.sffm import SFFM, DSFFM, NSFFM
+from memory.sffm import SFFM, NSFFM
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
-from utils import load_popgym_env, scale_by_norm
-from losses import tape_ddqn_loss, online_tape_q_loss, online_tape_redq_loss
 
-model_map = {GRU.name: GRU, SFFM.name: SFFM, DSFFM.name: DSFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
+from utils import get_wandb_model_info, load_popgym_env
+from losses import nan_breakpoint, tape_ddqn_loss, online_tape_q_loss, online_tape_redq_loss, tape_dqn_loss, tape_dqn_loss_filtered
+
+model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)
@@ -38,6 +39,8 @@ a.add_argument("--wandb", "-w", action="store_true")
 a.add_argument('--name', '-n', type=str, default=None)
 a.add_argument('--project', '-p', type=str, default="jax_dqn")
 a.add_argument('--load', '-l', type=str, default=None)
+a.add_argument('--log-model', '-m', action="store_true")
+a.add_argument('--log-grads', '-g', action="store_true")
 args = a.parse_args()
 
 with open(args.config) as f:
@@ -66,10 +69,10 @@ key = random.PRNGKey(config["seed"])
 eval_key = random.PRNGKey(config["eval"]["seed"])
 lr_schedule = optax.warmup_cosine_decay_schedule(
     init_value=0,
-    peak_value=config["train"]["lr"], 
+    peak_value=config["train"]["lr_start"], 
     warmup_steps=config["train"]["warmup_epochs"],
     decay_steps=config['collect']['epochs'] * config["train"]["train_ratio"],
-    #end_value=0.5 * config["train"]["lr"]
+    end_value=config["train"]["lr_end"]
 )
 # lr_schedule = optax.linear_schedule(
 #     init_value=0,
@@ -78,6 +81,7 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
 # )
 
 opt = optax.chain(
+    optax.zero_nans(),
     optax.clip_by_global_norm(config["train"]["gradient_scale"]),
     optax.adamw(lr_schedule, weight_decay=config["train"]["weight_decay"], eps=config["train"]["adam_eps"])
 )
@@ -119,6 +123,8 @@ pbar = tqdm.tqdm(total=epochs)
 best_eval_ep_reward = best_ep_reward = eval_ep_reward = ep_reward = -np.inf
 collector = TapeCollector(env, config)
 eval_collector = TapeCollector(eval_env, config["eval"])
+model_info = eqx.filter_jit(get_wandb_model_info)(q_network) if args.log_model else {}
+grad_info = {}
 transitions_collected = 0
 transitions_trained = 0
 
@@ -157,8 +163,9 @@ for epoch in range(1, epochs + 1):
         data = rb.sample(config["train"]["batch_size"], sample_key)
         transitions_trained += len(data['next_reward'])
 
-        outputs, gradient = eqx.filter_jit(online_tape_redq_loss)(
-            q_network, q_target, data, gamma, config["model"]["ensemble_subset"], progress, loss_key
+        
+        outputs, gradient = eqx.filter_jit(eqx.filter_value_and_grad(tape_dqn_loss, has_aux=True))(
+            q_network, q_target, data, gamma, loss_key
         )
         loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
         updates, opt_state = eqx.filter_jit(opt.update)(
@@ -167,16 +174,17 @@ for epoch in range(1, epochs + 1):
         q_network = eqx.filter_jit(eqx.apply_updates)(q_network, updates)
         q_target = eqx.filter_jit(soft_update)(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
-    if epoch > 1:
+    if epoch > config["collect"]["random_epochs"]:
         train_elapsed = time.time() - train_start
         total_train_time += train_elapsed
     # Eval
-    q_eval = eqx.filter_jit(eqx.tree_inference)(q_network, True)
-    if epoch % config["eval"]["interval"] == 0:
+    if epoch % config["eval"]["interval"] == 0 or best_eval_ep_reward == -jnp.inf:
+        q_eval = eqx.filter_jit(eqx.tree_inference)(q_network, True)
+        model_info = eqx.filter_jit(get_wandb_model_info)(q_network) if args.log_model else {}
         eval_keys = random.split(eval_key, config["eval"]["episodes"])
         eval_rewards = []
         for i in range(config["eval"]["episodes"]):
-            _, eval_ep_reward, _ = eval_collector(
+            eval_transitions, eval_ep_reward, _ = eval_collector(
                 q_eval, eqx.filter_jit(greedy_policy), 1.0, eval_keys[i], True
             )
             eval_rewards.append(eval_ep_reward)
@@ -184,12 +192,20 @@ for epoch in range(1, epochs + 1):
         if eval_ep_reward > best_eval_ep_reward:
             best_eval_ep_reward = eval_ep_reward
 
+        # Compute BPTT grads
+        if args.log_grads:
+            jac = eqx.filter_jit(eqx.filter_grad(tape_dqn_loss_filtered))(eval_transitions["observation"], q_eval, q_target, eval_transitions, gamma, eval_key)
+            temporal_grad = jac.sum(-1)
+            grad_info = {"grads/terminal_dloss_dx": temporal_grad}
+
 
     if args.wandb:
 #        action_hist = np.histogram(transitions["action"], bins=np.arange(act_shape + 1))
 #        action_hist = wandb.Histogram(np_histogram=action_hist)
 
         to_log = {
+            **{k: v.item() for k, v in model_info.items() if args.log_model},
+            **grad_info,
             "collect/epoch": epoch,
             #"collect/action_hist": action_hist,
             "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),

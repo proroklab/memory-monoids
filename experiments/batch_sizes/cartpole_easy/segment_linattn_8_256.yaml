@@ -1,0 +1,47 @@
+seed: 0
+
+collect:
+  env: "popgym.envs.PositionOnlyCartPoleEasy"
+  popgym_env: True
+  segment_length: 8
+  epochs: 10_000
+  random_epochs: 10_000
+  eps_start: 0.1
+  eps_end: 0.01
+  propagate_state: True
+
+train:
+  batch_size: 256
+  gamma: 0.98
+  target_delay: 50 # In epochs/updates
+  lr: 0.00005
+  gradient_scale: 0.01
+  warmup_epochs: 500
+  weight_decay: 0.01
+
+buffer:
+  size: 50_000 # In segments
+  contiguous: False
+
+model:
+  mlp_size: 64
+  recurrent_size: 128
+  dropout: 0.005
+  memory_name: "LinearAttention"
+  memory:
+    input_size: 64
+    trace_size: 32
+    context_size: 4
+    output_size: 128
+
+eval:
+  interval: 10
+  episodes: 20
+  collect:
+    env: "popgym.envs.PositionOnlyCartPoleEasy"
+    popgym_env: True
+    segment_length: 200
+    random_epochs: 0
+    eps_start: 0.0
+    eps_end: 0.00
+    propagate_state: True

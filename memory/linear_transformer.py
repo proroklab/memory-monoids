@@ -4,8 +4,7 @@ from equinox import nn
 import jax
 from jax import random, vmap, lax
 import jax.numpy as jnp
-from modules import Lambda
-from modules import mish
+from modules import Lambda, leaky_relu
 from utils import expand_right
 
 
@@ -45,9 +44,9 @@ class LinearAttention(eqx.Module):
         self.mlp = eqx.filter_vmap(nn.Sequential(
             [
                 nn.Linear(value_size, hidden_size, key=keys[4]),
-                mish,
+                leaky_relu,
                 nn.Linear(hidden_size, hidden_size, key=keys[5]),
-                mish,
+                leaky_relu,
                 nn.Linear(hidden_size, hidden_size, key=keys[6]),
             ]
         ))

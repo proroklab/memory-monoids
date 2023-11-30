@@ -48,31 +48,14 @@ def gamma(params: Tuple[jax.Array, jax.Array], t: jax.Array) -> jax.Array:
 # ever see one step/episode at a time.
 # This is probably what we want (to only use next_done during training)
 def associative_update(
-    # params: Tuple[jax.Array, jax.Array],
     carry: Tuple[jax.Array, jax.Array, jax.Array],
     incoming: Tuple[jax.Array, jax.Array, jax.Array],
 ) -> Tuple[jax.Array, jax.Array, jax.Array]:
     _, state, i, prev_start, done = carry
     params, x, j, start, next_done = incoming
-    # # TODO: We need to carry two separate flags, not just done
-    # # VALIDATED: Only need start...
-    # state = jax.lax.select(
-    #     jnp.tile(start, (1, *state.shape[1:])),
-    #     #jnp.zeros_like(state),
-    #     x,
-    #     state * gamma(params, j - i) + x
-    # )
-    state = jnp.logical_not(start) * state * gamma(params, j - i) + x
+    prev_state = jnp.logical_not(start) * state + start * jnp.zeros_like(state)
+    state = prev_state * gamma(params, j - i) + x
     return params, state, j, jnp.logical_or(start, prev_start), next_done
-
-    # state = state * gamma(params, j - i) * jnp.logical_not(start) + x
-    # #all_next_done_i = all_next_done[i.real.astype(jnp.int32)]
-    # #all_next_done_j = all_next_done[i.real.astype(jnp.int32)]
-    # #state = state * gamma(params, j - i) * jnp.logical_not(all_next_done_j) + x * jnp.logical_not(all_next_done_i)
-    # #state = state * gamma(params, j - i) * jnp.logical_not(next_done) + x * jnp.logical_not(done)
-    # #state = state * gamma(params, j - i) + x * jnp.logical_not(next_done)
-    # return state, j, start, next_done
-
 
 # Verified fine again
 def apply(

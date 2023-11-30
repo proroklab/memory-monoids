@@ -56,13 +56,13 @@ class Block(eqx.Module):
     def __init__(self, input_size, output_size, dropout, key):
         if dropout == 0.0:
             self.net = RandomSequential([
-                ortho_linear(key, input_size, output_size), 
+                nn.Linear(input_size, output_size, key=key), 
                 nn.LayerNorm(output_size, use_weight=False, use_bias=False),
                 leaky_relu,
             ])
         else:
             self.net = RandomSequential([
-                ortho_linear(key, input_size, output_size), 
+                nn.Linear(input_size, output_size, key=key), 
                 nn.LayerNorm(output_size, use_weight=False, use_bias=False),
                 nn.Dropout(dropout),
                 leaky_relu,
@@ -74,43 +74,30 @@ class Block(eqx.Module):
 class QHead(eqx.Module):
     post0: eqx.Module
     post1: eqx.Module
-    value: eqx.Module
-    advantage: eqx.Module
-    scale: eqx.Module
+    value: nn.Linear
+    advantage: nn.Linear
 
     def __init__(self, input_size, hidden_size, output_size, dropout, key):
-        keys = random.split(key, 5)
+        keys = random.split(key, 3)
 
         self.post0 = eqx.filter_vmap(Block(input_size, hidden_size, dropout, keys[0]))
         self.post1 = eqx.filter_vmap(Block(hidden_size, hidden_size, dropout, keys[1]))
-
-        value = final_linear(keys[2], input_size, 1, scale=0.01)
-        self.value = eqx.filter_vmap(value)
-        advantage = ortho_linear(keys[3], input_size, output_size)
-        self.advantage = eqx.filter_vmap(advantage)
-        scale = final_linear(keys[4], input_size, 1, scale=0.01)
-        self.scale = eqx.filter_vmap(scale)
+        self.value = eqx.filter_vmap(final_linear(keys[2], input_size, 1, scale=0.01))
+        self.advantage = eqx.filter_vmap(final_linear(keys[3], input_size, output_size, scale=0.01))
 
     def __call__(self, x, key):
         T = x.shape[0]
         net_keys = random.split(key, 2 * T)
         x = self.post0(x, net_keys[:T])
         x = self.post1(x, net_keys[T:2*T])
-    
-        value = self.value(x)
+        V = self.value(x) 
         A = self.advantage(x)
-        scale = self.scale(x)
-
-        A_normed = A / (1e-6 + jnp.linalg.norm(A, axis=-1, keepdims=True))
-        A_normed = A / A.max(axis=-1, keepdims=True) 
-        advantage = A_normed - jnp.mean(A_normed, axis=-1, keepdims=True)
-        # TODO: Only use target network for advantage branch
-        # Let value/scale increase as needed
-        q = value + scale * advantage
-        return q
+        # Dueling DQN
+        return V + (A - A.mean(axis=-1, keepdims=True))
         
 
 class RecurrentQNetwork(eqx.Module):
+    """The core model used in experiments"""
     input_size: int
     output_size: int
     config: Dict[str, Any]
@@ -147,8 +134,6 @@ class RecurrentQNetwork(eqx.Module):
 
             
         q = ensemble(self.q, y, net_keys[-1])
-        subsample = random.choice(key, q, (5,))
-        #q = jnp.median(q, axis=0)
         return q, final_state
 
     def evaluate(self, x, state, start, done, key):
@@ -195,7 +180,9 @@ def ortho_linear(key, input_size, output_size, scale=2 ** 0.5):
     return ortho_init(key, eqx.nn.Linear(input_size, output_size, key=key), scale=scale)
 
 def final_linear(key, input_size, output_size, scale=0.01):
-    linear = ortho_linear(key, input_size, output_size, scale=scale)
+    #linear = ortho_linear(key, input_size, output_size, scale=scale)
+    linear = nn.Linear(input_size, output_size, key=key)
+    linear = default_init(key, linear, scale=scale)
     linear = eqx.tree_at(lambda l: l.bias, linear, linear.bias * 0.0)
     return linear
 
@@ -261,6 +248,13 @@ def greedy_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
     q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=key)
+    action = jnp.argmax(q_values)
+    return action, state
+
+def ensemble_greedy_policy(
+    q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
+):
+    q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=key)
     #action = jnp.argmax(q_values.min(0))
     #action = jnp.argmax(jnp.median(q_values, axis=0))
     ensemble_reduced = jax.random.choice(key, q_values, tuple(), axis=0)
@@ -291,10 +285,10 @@ def sum_policy(
     return action, state
 
 def epsilon_greedy_policy(
-    q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
+    q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end, base_policy=greedy_policy
 ):
     _, p_key, r_key, s_key = random.split(key, 4)
-    action, state = greedy_policy(
+    action, state = base_policy(
         q_network, x, state, start, done, key=p_key, progress=None, epsilon_start=None, epsilon_end=None
     )
     random_action = random.randint(r_key, (), 0, q_network.output_size)

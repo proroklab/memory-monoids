@@ -174,7 +174,7 @@ for epoch in range(1, epochs + 1):
         q_network = eqx.filter_jit(eqx.apply_updates)(q_network, updates)
         q_target = eqx.filter_jit(soft_update)(q_network, q_target, tau=1 / config["train"]["target_delay"])
 
-    if epoch > config["collect"]["random_epochs"]:
+    if epoch > config["collect"]["random_epochs"] + 1:
         train_elapsed = time.time() - train_start
         total_train_time += train_elapsed
     # Eval

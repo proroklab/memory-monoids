@@ -5,7 +5,6 @@ from jax import numpy as jnp
 from functools import partial
 
 
-
 def init(
     memory_size: int, context_size: int, key, min_period: int = 1, max_period: int = 10_000 
 ) -> Tuple[jax.Array, jax.Array]:
@@ -57,6 +56,28 @@ def associative_update(
     state = prev_state * gamma(params, j - i) + x
     return params, state, j, jnp.logical_or(start, prev_start), next_done
 
+
+def unwrapped_associative_update(
+    carry: Tuple[jax.Array, jax.Array, jax.Array],
+    incoming: Tuple[jax.Array, jax.Array, jax.Array],
+) -> Tuple[jax.Array, jax.Array, jax.Array]:
+    _, state, i, = carry
+    params, x, j = incoming
+    state = state * gamma(params, j - i) + x
+    return params, state, j, 
+
+
+def wrapped_associative_update(carry, incoming): 
+    prev_start, _, state, i = carry
+    start, params, x, j = incoming
+    incoming = params, x, j
+    # Reset all elements in the carry if we are starting a new episode
+    state = state * jnp.logical_not(start) 
+    carry = (params, state, i)
+    out = unwrapped_associative_update(carry, incoming)
+    start_out = jnp.logical_or(start, prev_start)
+    return (start_out, *out)
+
 # Verified fine again
 def apply(
     params: Tuple[jax.Array, jax.Array],
@@ -89,10 +110,10 @@ def apply(
     # Fold the previous recurrent state into x (if not start)
     # x = state * gamma(params, jnp.array([1])) + x
     # This is not executed during inference -- method will just return x if size is 1
-    _, new_state, _, _, _ = jax.lax.associative_scan(
+    _, _, new_state, _ = jax.lax.associative_scan(
         # parameterized_update, (x, timestep, start, next_done), axis=0
-        associative_update,
-        (broadcasted_params, x, timestep, start, next_done),
+        wrapped_associative_update,
+        (start, broadcasted_params, x, timestep),
         axis=0,
     )
     return new_state[1:]

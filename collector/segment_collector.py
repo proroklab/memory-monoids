@@ -23,7 +23,7 @@ from jax import random
 ## ISSUE: collector done is offset from training done
 
 
-class BatchedSegmentCollector:
+class SegmentCollector:
     # Lifetime variables
     sampled_frames = 0
     sampled_epochs = 0
@@ -93,19 +93,14 @@ class BatchedSegmentCollector:
         truncateds = []
         starts = []
         episode_ids = []
-        seq_lens = []
-        episode_reward = []
-        seq_len = 0
 
         key, reset_key = random.split(key)
-        observation, _ = self.env.reset(seed=random.bits(key).item())
-        #done = False
+        observation, _ = self.env.reset(seed=random.bits(reset_key).item())
         terminated = False
         truncated = False
         start = True
 
         observations.append(observation)
-        #dones.append(done)
         terminateds.append(terminated)
         truncateds.append(truncated)
         starts.append(start)
@@ -113,7 +108,6 @@ class BatchedSegmentCollector:
         running_reward = 0
         self.episode_id += 1
         recurrent_state = q_network.initial_state()
-        #for step in range(self.config["steps_per_epoch"]):
         step = 0
         while not (terminated or truncated):
             if self.sampled_epochs < self.config["random_epochs"]:
@@ -140,19 +134,14 @@ class BatchedSegmentCollector:
                 _,
             ) = self.env.step(action)
             start = False
-            #self.next_done = bool(terminated or truncated)
-            #done = bool(terminated or truncated)
 
             observations.append(observation)
-            #dones.append(done)
             terminateds.append(terminated)
             truncateds.append(truncated)
             starts.append(False)
             actions.append(action)
             episode_ids.append(self.episode_id)
             next_rewards.append(reward)
-            #print(f'appending cur {self.observation} next {self.next_observation}, d {self.next_done}')
-            #print(observations, next_observations)
 
             running_reward += reward
             step += 1
@@ -162,14 +151,10 @@ class BatchedSegmentCollector:
             "action": np.array(actions), 
             "next_reward": np.array(next_rewards), 
             "next_observation": np.array(observations[1:]),
-            #"start": np.array(starts[:-1]), 
-            #"next_start": np.array(starts[1:]),
-            #"done": np.array(dones[:-1]), 
-            #"next_done": np.array(dones[1:]),
+            "next_done": np.array(terminateds[1:]) + np.array(truncateds[1:]),
             "next_terminated": np.array(terminateds[1:]),
             "next_truncated": np.array(truncateds[1:]),
             "start": np.array(starts[:-1]), 
-            #"next_start": np.array(starts[1:]),
             "mask": np.ones(len(next_rewards), dtype=bool),
             "episode_id": np.array(episode_ids),
         }

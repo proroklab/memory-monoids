@@ -5,6 +5,7 @@ import equinox as eqx
 from equinox import nn
 
 import memory.ffa as ffa
+from memory.module import MemoryModule
 from modules import leaky_relu, RandomSequential, default_init
 
 
@@ -49,7 +50,7 @@ class NSFFM(eqx.Module):
         ]
 
 
-class SFFM(eqx.Module):
+class SFFM(MemoryModule):
     input_size: int
     trace_size: int
     context_size: int
@@ -93,12 +94,13 @@ class SFFM(eqx.Module):
     def initial_state(self, shape=tuple()):
         return jnp.zeros((*shape, 1, self.trace_size, self.context_size), dtype=jnp.complex64)
 
-    def __call__(
-        self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
-    ) -> Tuple[jax.Array, jax.Array]:
+    def inner_fn(self, x: jax.Array, state: jax.Array, start: jax.Array, key=None):
         pre = jnp.abs(jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x)))
         pre = pre / (1e-8 + jnp.sum(pre, axis=(-2,-1), keepdims=True))
-        state = self.aggregate(pre, state, start)
+        state = self.scan(pre, state, start)
+        return state
+
+    def outer_fn(self, x: jax.Array, state: jax.Array, key=None):
         keys = jax.random.split(key, 2 * state.shape[0])
         s = state.reshape(state.shape[0], self.context_size * self.trace_size)
         scaled = jnp.concatenate([
@@ -107,8 +109,30 @@ class SFFM(eqx.Module):
         ], axis=-1)
         z = self.block0(scaled, keys[:state.shape[0]])
         z = self.block1(z, keys[state.shape[0]:])
-        final_state = state[-1:]
-        return z, final_state
+
+    def __call__(
+        self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
+    ) -> Tuple[jax.Array, jax.Array]:
+        state = self.inner_fn(x, state, start)
+        markov_state = self.outer_fn(x, state)
+        return markov_state, state[1:]
+
+    # def __call__(
+    #     self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
+    # ) -> Tuple[jax.Array, jax.Array]:
+    #     pre = jnp.abs(jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x)))
+    #     pre = pre / (1e-8 + jnp.sum(pre, axis=(-2,-1), keepdims=True))
+    #     state = self.aggregate(pre, state, start)
+    #     keys = jax.random.split(key, 2 * state.shape[0])
+    #     s = state.reshape(state.shape[0], self.context_size * self.trace_size)
+    #     scaled = jnp.concatenate([
+    #         jnp.log(1 + jnp.abs(s)) * jnp.sin(jnp.angle(s)),
+    #         jnp.log(1 + jnp.abs(s)) * jnp.cos(jnp.angle(s)),
+    #     ], axis=-1)
+    #     z = self.block0(scaled, keys[:state.shape[0]])
+    #     z = self.block1(z, keys[state.shape[0]:])
+    #     final_state = state[-1:]
+    #     return z, final_state
 
     def init_ffa(
         self, memory_size: int, context_size: int, min_period: int = 1, max_period: int = 10_000, *, key
@@ -138,7 +162,7 @@ class SFFM(eqx.Module):
         state, i, = carry
         x, j = incoming
         state = state * self.gamma(j - i) + x
-        return state, j, 
+        return state, j
 
     def wrapped_associative_update(self, carry, incoming): 
         prev_start, state, i = carry
@@ -151,7 +175,7 @@ class SFFM(eqx.Module):
         start_out = jnp.logical_or(start, prev_start)
         return (start_out, *out)
 
-    def aggregate(
+    def scan(
         self,
         x: jax.Array,
         state: jax.Array,

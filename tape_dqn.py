@@ -5,7 +5,6 @@ import jax
 import numpy as np
 from jax import random, vmap, nn
 import time
-import tracemalloc
 
 # from cpprb import ReplayBuffer
 from buffer import TapeBuffer, ShuffledTapeBuffer
@@ -27,7 +26,7 @@ from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
 
 from utils import get_wandb_model_info, load_popgym_env
-from losses import nan_breakpoint, tape_ddqn_loss, online_tape_q_loss, online_tape_redq_loss, tape_dqn_loss, tape_dqn_loss_filtered
+from losses import tape_dqn_loss, tape_dqn_loss_filtered, tape_ddqn_loss, tape_update
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
 
@@ -49,6 +48,7 @@ with open(args.config) as f:
 if args.debug:
     config["collect"]["random_epochs"] = 10
     config["train"]["batch_size"] = 10
+    config["train"]["ratio"] = 1
     jax.config.update('jax_disable_jit', True)
 
 if args.seed is not None:
@@ -139,7 +139,6 @@ for epoch in range(1, epochs + 1):
     progress = jnp.array(max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
     ))
-    #gamma = jnp.array(config["train"]["gamma"]) * progress
     for _ in range(config["collect"]["ratio"]):
         key, epoch_key, sample_key, loss_key = random.split(key, 4)
         (
@@ -162,17 +161,7 @@ for epoch in range(1, epochs + 1):
         _, sample_key = random.split(sample_key)
         data = rb.sample(config["train"]["batch_size"], sample_key)
         transitions_trained += len(data['next_reward'])
-
-        
-        outputs, gradient = eqx.filter_jit(eqx.filter_value_and_grad(tape_dqn_loss, has_aux=True))(
-            q_network, q_target, data, gamma, loss_key
-        )
-        loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
-        updates, opt_state = eqx.filter_jit(opt.update)(
-            gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
-        )
-        q_network = eqx.filter_jit(eqx.apply_updates)(q_network, updates)
-        q_target = eqx.filter_jit(soft_update)(q_network, q_target, tau=1 / config["train"]["target_delay"])
+        q_network, q_target, opt_state, q_mean, target_mean, target_network_mean, error_min, error_max, loss, gradient = eqx.filter_jit(tape_update)(q_network, q_target, data, opt, opt_state, gamma, 1 / config["train"]["target_delay"], loss_key)
 
     if epoch > config["collect"]["random_epochs"] + 1:
         train_elapsed = time.time() - train_start

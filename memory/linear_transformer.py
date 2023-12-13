@@ -1,9 +1,10 @@
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 import equinox as eqx
 from equinox import nn
 import jax
 from jax import random, vmap, lax
 import jax.numpy as jnp
+from memory.module import MemoryModule
 from modules import Lambda, leaky_relu
 from utils import expand_right
 
@@ -11,7 +12,48 @@ from utils import expand_right
 def phi(x, key=None):
     return 1 + jax.nn.elu(x)
 
-class LinearAttention(eqx.Module):
+
+class NLinearAttention(eqx.Module):
+    key_size: int
+    value_size: int
+    num_blocks: int
+    blocks: List[eqx.Module]
+    name: str = "NLinearAttention"
+
+
+    def __init__(
+        self,
+        input_size: int,
+        key_size: int,
+        value_size: int,
+        num_blocks: int,
+        key: jax.random.PRNGKey,
+    ):
+        k = jax.random.split(key, num_blocks + 1)
+        self.blocks = [
+            LinearAttention(input_size, key_size, value_size, k[i+1])
+            for i in range(num_blocks)
+        ]
+        self.key_size = key_size
+        self.value_size = value_size
+        self.num_blocks = num_blocks
+
+    def __call__(
+        self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
+    ) -> Tuple[jax.Array, jax.Array]:
+        for i, block in enumerate(self.sffm):
+            key, k = jax.random.split(key)
+            y, s = block(x, state[i], start, next_done, k)
+            x = x + y
+            state[i] = s
+        return y, state 
+
+    def initial_state(self, shape=tuple()):
+        return [
+            s.initial_state(shape) for s in self.blocks
+        ]
+
+class LinearAttention(MemoryModule):
     key: eqx.Module
     value: eqx.Module
     query: eqx.Module
@@ -54,38 +96,73 @@ class LinearAttention(eqx.Module):
         self.ln = eqx.filter_vmap(nn.LayerNorm(hidden_size))
 
     def associative_update(self, carry, inputs):
-        s, z, prev_start, done = carry
-        kv, k, start, next_done = inputs
+        s, z = carry
+        kv, k = inputs
 
-        s = s * jnp.logical_not(start) + kv
-        z = z * jnp.logical_not(start) + k
+        s = s + kv
+        z = z + k
 
-        return (s, z, jnp.logical_or(start, prev_start), next_done)
+        return (s, z)
+
+    def wrapped_associative_update(self, carry: jax.Array, incoming: jax.Array) -> Tuple[jax.Array, ...]:
+        """The reset-wrapped form of the associative update. 
+
+        You might need to override this
+        if you use variables in associative_update that are not from initial_state. 
+        This is equivalent to the h function in the paper:
+        b x H -> b x H
+        """
+        prev_start, *carry = carry
+        start, *incoming = incoming
+        # Reset all elements in the carry if we are starting a new episode
+        s, z = carry
+
+        s = jnp.logical_not(start) * s
+        z = jnp.logical_not(start) * z
+
+        out = self.associative_update((s, z), incoming)
+        start_out = jnp.logical_or(start, prev_start)
+        return (start_out, *out)
+
+    def scan(
+        self,
+        x: jax.Array,
+        state: List[jax.Array],
+        start: jax.Array,
+    ) -> jax.Array:
+        """Given an input and recurrent state, this will update the recurrent state. This is equivalent
+        to the inner-function g in the paper:
+        g: O x H -> S
+        """
+        # x: [T, ...]
+        # memory: [1, ...]
+        kv, k = x
+        s, z = state
+        T = k.shape[0]
+        start = start.reshape([T, 1, 1])
+
+        # Now insert previous recurrent state
+        s = jnp.concatenate([s, kv], axis=0)
+        z = jnp.concatenate([z, k], axis=0)
+        start = jnp.concatenate([jnp.zeros_like(start[:1]), start], axis=0)
+
+        # This is not executed during inference -- method will just return x if size is 1
+        _, s, z = lax.associative_scan(
+            self.wrapped_associative_update,
+            (start, s, z),
+            axis=0,
+        )
+        return s[1:], z[1:]
 
     def __call__(self, x, state, start, next_done, key=None):
         s, z = state
-        T = x.shape[0]
 
         key = self.key(x)
         query = self.query(x)
         value = self.value(x)
         kv = jnp.einsum("ti, tj -> tij", key, value)
 
-        # Insert previous recurrent state
-        start = start.reshape(T, 1, 1)
-        next_done = next_done.reshape(T, 1, 1)
-        start = jnp.concatenate([jnp.zeros_like(start[:1]), start], axis=0)
-        next_done = jnp.concatenate([jnp.zeros_like(next_done[:1]), next_done], axis=0)
-
-        # T + 1 keys/values, discord the zeroth before returning
-        kv = jnp.concatenate([s, kv], axis=0)
-        key = jnp.concatenate([z, key.reshape(T, 1, self.key_size)], axis=0)
-
-        s, z, _, _ = lax.associative_scan(self.associative_update, (kv, key, start, next_done))
-
-        # Discard prev state
-        s = s[1:]
-        z = z[1:]
+        s, z = self.scan((kv, key.reshape(key.shape[0], 1, -1)), state, start)
 
         numer = jnp.einsum("tij, ti -> tj", s, query)
         denom = jnp.einsum("tzi, tj -> tz", z, query).clip(1e-6)

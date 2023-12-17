@@ -94,45 +94,24 @@ class SFFM(MemoryModule):
     def initial_state(self, shape=tuple()):
         return jnp.zeros((*shape, 1, self.trace_size, self.context_size), dtype=jnp.complex64)
 
-    def inner_fn(self, x: jax.Array, state: jax.Array, start: jax.Array, key=None):
+    def __call__(
+        self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
+    ) -> Tuple[jax.Array, jax.Array]:
         pre = jnp.abs(jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x)))
-        pre = pre / (1e-8 + jnp.sum(pre, axis=(-2,-1), keepdims=True))
+        pre = pre / jnp.sum(pre, axis=(-2,-1), keepdims=True)
         state = self.scan(pre, state, start)
-        return state
-
-    def outer_fn(self, x: jax.Array, state: jax.Array, key=None):
         keys = jax.random.split(key, 2 * state.shape[0])
         s = state.reshape(state.shape[0], self.context_size * self.trace_size)
+        eps = s.real + (s.real==0 + jnp.sign(s.real)) * 0.01
+        s = s + eps
         scaled = jnp.concatenate([
             jnp.log(1 + jnp.abs(s)) * jnp.sin(jnp.angle(s)),
             jnp.log(1 + jnp.abs(s)) * jnp.cos(jnp.angle(s)),
         ], axis=-1)
         z = self.block0(scaled, keys[:state.shape[0]])
         z = self.block1(z, keys[state.shape[0]:])
-
-    def __call__(
-        self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
-    ) -> Tuple[jax.Array, jax.Array]:
-        state = self.inner_fn(x, state, start)
-        markov_state = self.outer_fn(x, state)
-        return markov_state, state[1:]
-
-    # def __call__(
-    #     self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
-    # ) -> Tuple[jax.Array, jax.Array]:
-    #     pre = jnp.abs(jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x)))
-    #     pre = pre / (1e-8 + jnp.sum(pre, axis=(-2,-1), keepdims=True))
-    #     state = self.aggregate(pre, state, start)
-    #     keys = jax.random.split(key, 2 * state.shape[0])
-    #     s = state.reshape(state.shape[0], self.context_size * self.trace_size)
-    #     scaled = jnp.concatenate([
-    #         jnp.log(1 + jnp.abs(s)) * jnp.sin(jnp.angle(s)),
-    #         jnp.log(1 + jnp.abs(s)) * jnp.cos(jnp.angle(s)),
-    #     ], axis=-1)
-    #     z = self.block0(scaled, keys[:state.shape[0]])
-    #     z = self.block1(z, keys[state.shape[0]:])
-    #     final_state = state[-1:]
-    #     return z, final_state
+        final_state = state[-1:]
+        return z, final_state
 
     def init_ffa(
         self, memory_size: int, context_size: int, min_period: int = 1, max_period: int = 10_000, *, key
@@ -161,15 +140,16 @@ class SFFM(MemoryModule):
     ) -> Tuple[jax.Array, jax.Array, jax.Array]:
         state, i, = carry
         x, j = incoming
-        state = state * self.gamma(j - i) + x
-        return state, j
+        state = state * self.gamma(j) + x
+        return state, j + i
 
     def wrapped_associative_update(self, carry, incoming): 
         prev_start, state, i = carry
         start, x, j = incoming
-        incoming = x, j
         # Reset all elements in the carry if we are starting a new episode
         state = state * jnp.logical_not(start) 
+        j = j * jnp.logical_not(start)
+        incoming = x, j
         carry = (state, i)
         out = self.unwrapped_associative_update(carry, incoming)
         start_out = jnp.logical_or(start, prev_start)
@@ -186,7 +166,8 @@ class SFFM(MemoryModule):
         # x: [T, memory_size]
         # memory: [1, memory_size, context_size]
         T = x.shape[0]
-        timestep = jnp.arange(T + 1, dtype=jnp.int32)
+        #timestep = jnp.arange(T + 1, dtype=jnp.int32)
+        timestep = jnp.ones(T + 1, dtype=jnp.int32).reshape(-1, 1, 1)
         # Add context dim
         start = start.reshape(T, 1, 1)
 

@@ -168,11 +168,13 @@ def ortho_init(key, linear, scale):
     linear = eqx.tree_at(lambda l: l.bias, linear, jnp.zeros_like(linear.bias))
     return linear
 
-def default_init(key, linear, scale=1.0, zero_bias=False):
+def default_init(key, linear, scale=1.0, zero_bias=False, fixed_bias=None):
     lim = math.sqrt(scale / linear.in_features)
     linear = eqx.tree_at(lambda l: l.weight, linear, jax.random.uniform(key, linear.weight.shape, minval=-lim, maxval=lim))
     if zero_bias:
         linear = eqx.tree_at(lambda l: l.bias, linear, jnp.zeros_like(linear.bias))
+    elif fixed_bias is not None:
+        linear = eqx.tree_at(lambda l: l.bias, linear, jnp.full_like(linear.bias, fixed_bias))
     return linear
 
 

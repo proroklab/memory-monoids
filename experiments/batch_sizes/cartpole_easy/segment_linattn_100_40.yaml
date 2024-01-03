@@ -4,6 +4,7 @@ collect:
   env: "popgym.envs.PositionOnlyCartPoleEasy"
   popgym_env: True
   env_prev_action: True
+  segment_length: 100
   epochs: 10_000
   random_epochs: 10_000
   eps_start: 0.2
@@ -12,7 +13,7 @@ collect:
   ratio: 1
 
 train:
-  batch_size: 4_000
+  batch_size: 40
   gamma: 
     - 0.99
   target_delay: 200 # In epochs/updates
@@ -25,8 +26,8 @@ train:
   train_ratio: 1
 
 buffer:
-  size: 4_000_000 # In timesteps 
-  swap_iters: "auto" # sqrt(batch_size) auto
+  size: 100_000 # In segments
+  contiguous: False
 
 model:
   mlp_size: 256
@@ -46,6 +47,7 @@ eval:
   collect:
     env: "popgym.envs.PositionOnlyCartPoleEasy"
     popgym_env: True
+    segment_length: 200
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

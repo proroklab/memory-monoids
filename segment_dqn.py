@@ -21,7 +21,7 @@ from modules import epsilon_greedy_policy, anneal, RecurrentQNetwork, hard_updat
 from memory.gru import GRU
 from memory.sffm import NSFFM, SFFM
 from utils import get_wandb_model_info, load_popgym_env, scale_by_norm
-from losses import segment_ddqn_loss, segment_dqn_loss
+from losses import segment_ddqn_loss, segment_dqn_loss, segment_update
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
 
@@ -135,7 +135,7 @@ for epoch in range(1, epochs + 1):
             best_ep_reward
         ) = collector(q_network, eqx.filter_jit(epsilon_greedy_policy), jnp.array(progress), epoch_key, False)
 
-        rb.add(epoch_key, **transitions)
+        rb.add(**transitions)
         rb.on_episode_end()
         if epoch <= config["collect"]["random_epochs"]:
             break
@@ -149,17 +149,7 @@ for epoch in range(1, epochs + 1):
         _, sample_key = random.split(sample_key)
         data = rb.sample(config["train"]["batch_size"], sample_key)
         transitions_trained += len(data['next_reward'])
-
-        
-        outputs, gradient = eqx.filter_jit(eqx.filter_value_and_grad(segment_dqn_loss, has_aux=True))(
-            q_network, q_target, data, gamma, loss_key
-        )
-        loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
-        updates, opt_state = eqx.filter_jit(opt.update)(
-            gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
-        )
-        q_network = eqx.filter_jit(eqx.apply_updates)(q_network, updates)
-        q_target = eqx.filter_jit(soft_update)(q_network, q_target, tau=1 / config["train"]["target_delay"])
+        q_network, q_target, opt_state, q_mean, target_mean, target_network_mean, error_min, error_max, loss, gradient = eqx.filter_jit(segment_update)(q_network, q_target, data, opt, opt_state, gamma, 1 / config["train"]["target_delay"], loss_key)
 
     if epoch > config["collect"]["random_epochs"] + 1:
         train_elapsed = time.time() - train_start

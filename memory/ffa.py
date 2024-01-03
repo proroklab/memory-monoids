@@ -15,6 +15,15 @@ def init(
     b = 2 * jnp.pi / jnp.exp(jax.random.uniform(k2, (context_size,), minval=jnp.log(min_period), maxval=jnp.log(max_period)))
     return a, b
 
+def init_deterministic(
+    memory_size: int, context_size: int, min_period: int = 1, max_period: int = 1_000 
+) -> Tuple[jax.Array, jax.Array]:
+    a_low = 1e-6
+    a_high = 0.5 
+    a = jnp.linspace(a_low, a_high, memory_size)
+    b = 2 * jnp.pi / jnp.linspace(min_period, max_period, context_size)
+    return a, b
+
 
 def initial_state(params: Tuple[jax.Array, jax.Array]) -> jax.Array:
     a, b = params

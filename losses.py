@@ -38,7 +38,9 @@ def nan_breakpoint(x):
         jax.debug.breakpoint()
     jax.lax.cond(jnp.isfinite(x).all(), true_fn, false_fn, x)
 
-@partial(eqx.filter_value_and_grad, has_aux=True)
+def tempered_softmax(x, temp=10, key=None):
+    return jax.nn.softmax(x * temp)
+
 def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     # Double DQN
     B, T = segment["next_reward"].shape
@@ -48,7 +50,8 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
     )
     batch_index = jnp.repeat(jnp.arange(B), T)
     time_index = jnp.tile(jnp.arange(T), B)
-    selected_q = q_values[
+    # B, ensemble, T, action
+    selected_q = q_values.squeeze(1)[
         batch_index, time_index, segment["action"].reshape(-1)
     ].reshape(segment["action"].shape)
 
@@ -59,54 +62,45 @@ def segment_ddqn_loss(q_network, q_target, segment, gamma, key):
         segment["next_observation"], initial_state, segment["start"], segment["next_terminated"], key
     ))
     # Double DQN
-    next_q = next_q[batch_index, time_index, next_q_action_idx.argmax(-1).flatten()].reshape(B, T)
+    next_q = next_q.squeeze(1)[batch_index, time_index, next_q_action_idx.squeeze(1).argmax(-1).flatten()].reshape(B, T)
 
     target = segment["next_reward"] + (1.0 - segment["next_terminated"]) * gamma * next_q
     error = selected_q - target
-    error = jnp.clip(error, a_max=2 * error.std())
     error_min, error_max = jnp.min(error), jnp.max(error)
     loss = huber(masked_mean(jnp.abs(error), segment['mask']))
-    q_mean = masked_mean(q_values, jnp.expand_dims(segment['mask'], -1))
+    q_mean = masked_mean(q_values.squeeze(1), jnp.expand_dims(segment['mask'], -1))
     target_mean = masked_mean(target, segment['mask'])
     target_network_mean = masked_mean(next_q, segment['mask'])
     return loss, (q_mean, target_mean, target_network_mean, error_min, error_max)
 
 
-def tempered_softmax(x, temp=10, key=None):
-    return jax.nn.softmax(x * temp)
-
-#@partial(eqx.filter_value_and_grad, has_aux=True)
 def segment_dqn_loss(q_network, q_target, segment, gamma, key):
     B, T = segment["next_reward"].shape
     initial_state = q_network.initial_state()
-    q_values, states = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
+    q_values, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
         segment["observation"], initial_state, segment["start"], segment["next_terminated"], key
     )
     batch_index = jnp.repeat(jnp.arange(B), T)
     time_index = jnp.tile(jnp.arange(T), B)
-    selected_q = q_values[
+    # B, ensemble, T, action
+    selected_q = q_values.squeeze(1)[
         batch_index, time_index, segment["action"].reshape(-1)
     ].reshape(segment["action"].shape)
 
-    next_q, next_target_states = jax.lax.stop_gradient(eqx.filter_vmap(q_target, in_axes=(0, None, 0, 0, None))(
+    next_q, _ = jax.lax.stop_gradient(eqx.filter_vmap(q_target, in_axes=(0, None, 0, 0, None))(
         segment["next_observation"], initial_state, segment["start"], segment["next_terminated"], key
     ))
-    next_q = next_q[batch_index, time_index, next_q.argmax(-1).flatten()].reshape(B, T)
+    next_q = next_q.squeeze(1)[batch_index, time_index].argmax(-1).reshape(B, T)
 
     target = segment["next_reward"] + (1.0 - segment["next_terminated"]) * gamma * next_q
     error = selected_q - target
-    error = jnp.clip(error, a_max=2 * error.std())
     error_min, error_max = jnp.min(error), jnp.max(error)
     loss = huber(masked_mean(jnp.abs(error), segment['mask']))
-    q_mean = masked_mean(q_values, jnp.expand_dims(segment['mask'], -1))
+    q_mean = masked_mean(q_values.squeeze(1), jnp.expand_dims(segment['mask'], -1))
     target_mean = masked_mean(target, segment['mask'])
     target_network_mean = masked_mean(next_q, segment['mask'])
-    if isinstance(states, (List, Tuple)):
-        states = jnp.concatenate(states, axis=-1)
-    state_l2 = jnp.sqrt(jnp.sum(states ** 2 * segment['mask']))
     return loss, (q_mean, target_mean, target_network_mean, error_min, error_max)
 
-#@partial(eqx.filter_value_and_grad, has_aux=True)
 def tape_dqn_loss_filtered(obs, q_network, q_target, tape, gamma, key):
     B = tape["next_reward"].shape[0]
     initial_state = q_network.initial_state()
@@ -157,7 +151,6 @@ def tape_dqn_loss(q_network, q_target, tape, gamma, key):
 
 
 def segment_dqn_loss(q_network, q_target, segment, gamma, key):
-    # Double DQN
     B, T = segment["next_reward"].shape
     initial_state = q_network.initial_state()
     q_values, _ = eqx.filter_vmap(q_network, in_axes=(0, None, 0, 0, None))(
@@ -283,8 +276,6 @@ def tape_ddqn_loss(q_network, q_target, tape, gamma, key):
 
     target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
     error = selected_q - target
-    # Clip large positive errors
-    #error = jnp.clip(error, a_max=2 * error.std())
     error_min, error_max = jnp.min(error), jnp.max(error)
     loss = huber(error)
     q_mean = jnp.mean(q_values)
@@ -303,7 +294,19 @@ def tape_update(q_network, q_target, data, opt, opt_state, gamma, tau, loss_key)
         gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
     )
     q_network = eqx.apply_updates(q_network, updates)
-    #q_target = soft_update(q_network, q_target, tau=1 / config["train"]["target_delay"])
     q_target = soft_update(q_network, q_target, tau=tau)
     return q_network, q_target, opt_state, q_mean, target_mean, target_network_mean, error_min, error_max, loss, gradient
 
+
+def segment_update(q_network, q_target, data, opt, opt_state, gamma, tau, loss_key):
+
+    outputs, gradient = eqx.filter_value_and_grad(segment_ddqn_loss, has_aux=True)(
+        q_network, q_target, data, gamma, loss_key
+    )
+    loss, (q_mean, target_mean, target_network_mean, error_min, error_max) = outputs
+    updates, opt_state = opt.update(
+        gradient, opt_state, params=eqx.filter(q_network, eqx.is_inexact_array)
+    )
+    q_network = eqx.apply_updates(q_network, updates)
+    q_target = soft_update(q_network, q_target, tau=tau)
+    return q_network, q_target, opt_state, q_mean, target_mean, target_network_mean, error_min, error_max, loss, gradient

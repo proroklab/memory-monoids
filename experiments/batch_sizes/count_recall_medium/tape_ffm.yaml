@@ -1,45 +1,45 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.PositionOnlyCartPoleEasy"
+  env: "popgym.envs.CountRecallMedium"
+  env_prev_action: False
   popgym_env: True
-  env_prev_action: True
-  segment_length: 200
-  epochs: 10_000
-  random_epochs: 10_000
-  eps_start: 0.2
-  eps_end: 0.01
+  epochs: 40_000
+  random_epochs: 30_000
+  eps_start: 0.2 #1.0
+  eps_end: 0.01 #3.0
   propagate_state: True
   ratio: 1
 
 train:
-  batch_size: 20
+  batch_size: 4_000
   gamma: 
-    - 0.99
+    - 0.5
   target_delay: 200 # In epochs/updates
   lr_start: 0.0001
   lr_end: 0.0001
   adam_eps: 1.0e-8
-  gradient_scale: 0.01
+  gradient_scale: 0.05
   warmup_epochs: 200
-  weight_decay: 0.0
+  weight_decay: 0.000
   train_ratio: 1
 
 buffer:
-  size: 100_000 # In segments
-  contiguous: False
+  size: 50_000_000 # In timesteps 
+  swap_iters: "auto" # sqrt(batch_size) auto
 
 model:
   mlp_size: 256
   recurrent_size: 256
-  dropout: 0.0
+  dropout: 0.005
   ensemble_size: 1
   ensemble_subset: 1
-  memory_name: "LinearAttention"
+  memory_name: "FFM"
   memory:
     input_size: 256
-    key_size: 16
-    value_size: 16
+    trace_size: 64
+    context_size: 4
+    output_size: 256
 
 eval:
   interval: 10
@@ -47,7 +47,6 @@ eval:
   collect:
     env: "popgym.envs.PositionOnlyCartPoleEasy"
     popgym_env: True
-    segment_length: 200
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

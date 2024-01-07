@@ -12,7 +12,7 @@ collect:
   ratio: 1
 
 train:
-  batch_size: 4_000
+  batch_size: 1_000
   gamma: 
     - 0.99
   target_delay: 200 # In epochs/updates
@@ -36,12 +36,12 @@ model:
   ensemble_subset: 1
   memory_name: "FFM"
   memory:
-    # num_blocks: 1
     input_size: 256
     trace_size: 64
     context_size: 4
     output_size: 256
     # dropout: 0.01
+    # num_blocks: 1
 
 eval:
   interval: 10

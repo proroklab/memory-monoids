@@ -4,7 +4,7 @@ collect:
   env: "popgym.envs.PositionOnlyCartPoleEasy"
   popgym_env: True
   env_prev_action: True
-  segment_length: 20
+  segment_length: 100
   epochs: 10_000
   random_epochs: 10_000
   eps_start: 0.2
@@ -13,7 +13,7 @@ collect:
   ratio: 1
 
 train:
-  batch_size: 200
+  batch_size: 10
   gamma: 
     - 0.99
   target_delay: 200 # In epochs/updates

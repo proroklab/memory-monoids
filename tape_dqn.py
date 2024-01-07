@@ -24,11 +24,12 @@ from memory.gru import GRU
 from memory.sffm import SFFM, NSFFM
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
+from memory.lru import StackedLRU
 
 from utils import get_wandb_model_info, load_popgym_env
 from losses import tape_dqn_loss, tape_dqn_loss_filtered, tape_ddqn_loss, tape_update
 
-model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
+model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLRU.name: StackedLRU}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)

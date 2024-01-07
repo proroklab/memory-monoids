@@ -11,7 +11,6 @@ from typing import List, Tuple
 
 parallel_scan = jax.lax.associative_scan
 
-
 # Parallel scan operations
 @jax.vmap
 def binary_operator_diag(q_i, q_j):
@@ -119,9 +118,9 @@ class LRU(eqx.Module):
         start = jnp.concatenate([jnp.zeros_like(start[:1]), start], axis=0)
 
         # Compute hidden states
-        # _, _, xs = parallel_scan(binary_operator_diag, (start, Lambda_elements, Bu_elements))
         _, _, xs = parallel_scan(wrapped_associative_update, (start, Lambda_elements, Bu_elements))
         xs = xs[1:]
+
         # Use them to compute the output of the module
         outputs = jax.vmap(lambda x, u: (C @ x).real + self.D * u)(xs, x)
 
@@ -144,23 +143,20 @@ class SequenceLayer(eqx.Module):
         self.d_model = d_model
         self.d_hidden = d_hidden
         self.lru = LRU(self.d_model, d_hidden, key=keys[0])
-        # self.out1 = nn.Linear(self.d_model, self.d_model, key=keys[1])
-        # self.out2 = nn.Linear(self.d_model, self.d_model, key=keys[2])
         self.out1 = eqx.filter_vmap(nn.Linear(self.d_model, self.d_model, key=keys[1]))
         self.out2 = eqx.filter_vmap(nn.Linear(self.d_model, self.d_model, key=keys[2]))
-        self.normalization = nn.LayerNorm(self.d_model)
+        self.normalization = eqx.filter_vmap(nn.LayerNorm(self.d_model))
 
     def __call__(self, state, x, start):
-        carry = x
-        x = jax.vmap(self.normalization)(x)  # pre normalization
+        skip = x
+        x = self.normalization(x)  # pre normalization
         state, x = self.lru(state, x, start)  # call LRU
         x = jax.nn.gelu(x)
         o1 = self.out1(x)
         x = o1 * jax.nn.sigmoid(self.out2(x))  # GLU
-        return state, carry + x  # skip connection
+        return state, skip + x  # skip connection
 
 
-# class StackedEncoderModel(nn.Module):
 class StackedLRU(MemoryModule):
     """Encoder containing several SequenceLayer"""
 

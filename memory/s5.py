@@ -62,7 +62,7 @@ def apply_ssm(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, start, conj_sy
     """
     Lambda_elements = Lambda_bar * jnp.ones((input_sequence.shape[0],
                                             Lambda_bar.shape[0]))
-    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
+    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence.astype(jnp.complex64))
 
     Lambda_elements = jnp.concatenate([
         jnp.ones((1, Lambda_bar.shape[0])),

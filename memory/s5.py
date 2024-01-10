@@ -36,12 +36,12 @@ def wrapped_associative_update(carry: jax.Array, incoming: jax.Array) -> Tuple[j
     prev_start, *carry = carry
     start, *incoming = incoming
     # Reset all elements in the carry if we are starting a new episode
-    s, z = carry
+    A, b = carry
 
-    s = jnp.logical_not(start) * s
-    z = jnp.logical_not(start) * z
+    A = jnp.logical_not(start) * A + start * jnp.ones_like(A)
+    b = jnp.logical_not(start) * b
 
-    out = binary_operator((s, z), incoming)
+    out = binary_operator((A, b), incoming)
     start_out = jnp.logical_or(start, prev_start)
     return (start_out, *out)
 

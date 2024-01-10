@@ -30,26 +30,26 @@ def wrapped_associative_update(carry: jax.Array, incoming: jax.Array) -> Tuple[j
     prev_start, *carry = carry
     start, *incoming = incoming
     # Reset all elements in the carry if we are starting a new episode
-    s, z = carry
+    A, b = carry
 
-    s = jnp.logical_not(start) * s
-    z = jnp.logical_not(start) * z
+    A = jnp.logical_not(start) * A + start * jnp.ones_like(A)
+    b = jnp.logical_not(start) * b
 
-    out = binary_operator_diag((s, z), incoming)
+    out = binary_operator_diag((A, b), incoming)
     start_out = jnp.logical_or(start, prev_start)
     return (start_out, *out)
 
 
-def matrix_init(key, shape, dtype=jnp.float_, normalization=1):
+def matrix_init(key, shape, dtype=jnp.float32, normalization=1):
     return jax.random.normal(key=key, shape=shape, dtype=dtype) / normalization
 
 
-def nu_init(key, shape, r_min, r_max, dtype=jnp.float_):
+def nu_init(key, shape, r_min, r_max, dtype=jnp.float32):
     u = jax.random.uniform(key=key, shape=shape, dtype=dtype)
     return jnp.log(-0.5 * jnp.log(u * (r_max**2 - r_min**2) + r_min**2))
 
 
-def theta_init(key, shape, max_phase, dtype=jnp.float_):
+def theta_init(key, shape, max_phase, dtype=jnp.float32):
     u = jax.random.uniform(key, shape=shape, dtype=dtype)
     return jnp.log(max_phase * u)
 
@@ -102,7 +102,7 @@ class LRU(eqx.Module):
         C = self.C_re + 1j * self.C_im
 
         Lambda_elements = jnp.repeat(diag_lambda[None, ...], x.shape[0], axis=0)
-        Bu_elements = jax.vmap(lambda u: B_norm @ u)(x)
+        Bu_elements = jax.vmap(lambda u: B_norm @ u)(x.astype(jnp.complex64))
 
         Lambda_elements = jnp.concatenate([
             jnp.ones((1, diag_lambda.shape[0])),

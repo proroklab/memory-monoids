@@ -13,12 +13,14 @@ def phi(x, key=None):
     return 1 + jax.nn.elu(x)
 
 
-class NLinearAttention(eqx.Module):
+class StackedLinearAttention(eqx.Module):
     key_size: int
     value_size: int
-    num_blocks: int
+    n_layers: int
     blocks: List[eqx.Module]
-    name: str = "NLinearAttention"
+    project: nn.Linear
+    ln: nn.LayerNorm
+    name: str = "StackedLinearAttention"
 
 
     def __init__(
@@ -26,25 +28,28 @@ class NLinearAttention(eqx.Module):
         input_size: int,
         key_size: int,
         value_size: int,
-        num_blocks: int,
+        n_layers: int,
         key: jax.random.PRNGKey,
     ):
-        k = jax.random.split(key, num_blocks + 1)
+        k = jax.random.split(key, n_layers + 1)
+        self.project = eqx.filter_vmap(nn.Linear(input_size, key_size * value_size, key=k[0]))
         self.blocks = [
             LinearAttention(input_size, key_size, value_size, k[i+1])
-            for i in range(num_blocks)
+            for i in range(n_layers)
         ]
         self.key_size = key_size
         self.value_size = value_size
-        self.num_blocks = num_blocks
+        self.n_layers = n_layers
+        self.ln = eqx.filter_vmap(nn.LayerNorm((key_size * value_size), use_bias=False, use_weight=False))
 
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
-        for i, block in enumerate(self.sffm):
+        x = self.project(x)
+        for i, block in enumerate(self.blocks):
             key, k = jax.random.split(key)
             y, s = block(x, state[i], start, next_done, k)
-            x = x + y
+            x = self.ln(x + y)
             state[i] = s
         return y, state 
 
@@ -147,6 +152,8 @@ class LinearAttention(MemoryModule):
         start = jnp.concatenate([jnp.zeros_like(start[:1]), start], axis=0)
 
         # This is not executed during inference -- method will just return x if size is 1
+        # if s.shape[0] > 2:
+        #     breakpoint()
         _, s, z = lax.associative_scan(
             self.wrapped_associative_update,
             (start, s, z),

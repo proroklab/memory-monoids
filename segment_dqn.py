@@ -16,6 +16,8 @@ import argparse
 import yaml
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention
+from memory.lru import StackedLRU
+from memory.s5 import StackedS5
 
 from modules import epsilon_greedy_policy, anneal, RecurrentQNetwork, hard_update, soft_update, greedy_policy
 from memory.gru import GRU
@@ -23,7 +25,7 @@ from memory.sffm import NSFFM, SFFM
 from utils import get_wandb_model_info, load_popgym_env, scale_by_norm
 from losses import segment_ddqn_loss, segment_dqn_loss, segment_update
 
-model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention}
+model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)

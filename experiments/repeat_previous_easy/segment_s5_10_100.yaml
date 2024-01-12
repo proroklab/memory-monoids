@@ -1,20 +1,24 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.CountRecallEasy"
+  env: "popgym.envs.RepeatPreviousEasy"
   popgym_env: True
-  env_prev_action: True
-  epochs: 10_000
-  random_epochs: 10_000
+  env_prev_action: False
+  env_kwargs: 
+    num_decks: 2
+    k: 10
+  segment_length: 10
+  epochs: 5_000
+  random_epochs: 5_000
   eps_start: 0.2
-  eps_end: 0.01
+  eps_end: 0.1
   propagate_state: True
   ratio: 1
 
 train:
-  batch_size: 1_000
+  batch_size: 100
   gamma: 
-    - 0.99
+    - 0.5
   target_delay: 200 # In epochs/updates
   lr_start: 0.0001
   lr_end: 0.0001
@@ -25,8 +29,8 @@ train:
   train_ratio: 1
 
 buffer:
-  size: 4_000_000 # In timesteps 
-  swap_iters: "auto" # sqrt(batch_size) auto
+  size: 100_000 # In segments
+  contiguous: False
 
 model:
   mlp_size: 256
@@ -34,19 +38,21 @@ model:
   dropout: 0.0
   ensemble_size: 1
   ensemble_subset: 1
-  memory_name: "StackedLRU"
+  memory_name: "StackedS5"
   memory:
     input_size: 256
-    d_model: 256
-    d_hidden: 128
     n_layers: 2
+    d_model: 256
+    ssm_size: 256
+    blocks: 1
 
 eval:
   interval: 10
   episodes: 20
   collect:
-    env: "popgym.envs.CountRecallEasy"
+    env: "popgym.envs.RepeatPreviousEasy"
     popgym_env: True
+    segment_length: 200
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

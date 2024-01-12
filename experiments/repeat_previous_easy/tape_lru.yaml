@@ -1,20 +1,20 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.CountRecallEasy"
+  env: "popgym.envs.RepeatPreviousEasy"
   popgym_env: True
-  env_prev_action: True
-  epochs: 10_000
-  random_epochs: 10_000
+  env_prev_action: False
+  epochs: 5_000
+  random_epochs: 5_000
   eps_start: 0.2
-  eps_end: 0.01
+  eps_end: 0.1
   propagate_state: True
   ratio: 1
 
 train:
-  batch_size: 1_000
+  batch_size: 4_000
   gamma: 
-    - 0.99
+    - 0.5
   target_delay: 200 # In epochs/updates
   lr_start: 0.0001
   lr_end: 0.0001
@@ -45,7 +45,7 @@ eval:
   interval: 10
   episodes: 20
   collect:
-    env: "popgym.envs.CountRecallEasy"
+    env: "popgym.envs.RepeatPreviousEasy"
     popgym_env: True
     random_epochs: 0
     eps_start: 0.0

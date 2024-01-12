@@ -33,7 +33,7 @@ def load_popgym_env(config, eval=False, popgym=True):
     if popgym:
         module, cls = config["collect"]["env"].rsplit(".", 1)
         mod = importlib.import_module(module)
-        instance = getattr(mod, cls)()
+        instance = getattr(mod, cls)(**config["collect"].get("env_kwargs", {}))
     else:
         instance = gym.make(config["collect"]["env"])
     if config["collect"]["env_prev_action"]:

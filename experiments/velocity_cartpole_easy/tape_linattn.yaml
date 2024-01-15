@@ -1,20 +1,20 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.RepeatPreviousEasy"
+  env: "popgym.envs.VelocityOnlyCartPoleEasy"
   popgym_env: True
-  env_prev_action: False
-  epochs: 5_000
-  random_epochs: 5_000
+  env_prev_action: True
+  epochs: 10_000
+  random_epochs: 10_000
   eps_start: 0.2
-  eps_end: 0.1
+  eps_end: 0.01
   propagate_state: True
   ratio: 1
 
 train:
   batch_size: 1_000
   gamma: 
-    - 0.5
+    - 0.99
   target_delay: 200 # In epochs/updates
   lr_start: 0.0001
   lr_end: 0.0001
@@ -44,7 +44,7 @@ eval:
   interval: 10
   episodes: 20
   collect:
-    env: "popgym.envs.RepeatPreviousEasy"
+    env: "popgym.envs.VelocityOnlyCartPoleEasy"
     popgym_env: True
     random_epochs: 0
     eps_start: 0.0

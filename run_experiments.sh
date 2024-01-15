@@ -11,7 +11,10 @@ WANDB_GROUP=${WANDB_GROUP:-"rdqn_paper"}
 XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.2}
 CHUNK_SIZE=${CHUNK_SIZE:-4}
 CMD_DELIM=${SERIAL:-";"} # Use ; or & to do serial or parallel
-# DEBUG=echo # Set to echo for debug
+# Set to echo for debug
+EXECUTE_CMD=${EXECUTE:-echo}
+# Or for the real thing
+#EXECUTE_CMD=sbatch /home/sm2558/ser_paper/experiment.wilkes
 DEBUG=${DEBUG:-}
 
 
@@ -37,39 +40,7 @@ for SEED in $(seq $SEED_START $SEED_END); do
     done
 done
 for ((i=0; i<${#CMDS[@]}; i+=CHUNK_SIZE)); do
-    # Print slice of array
-    echo "${CMDS[@]:i:CHUNK_SIZE}"
-    echo
+    # slice of array
+    #export CURRENT_CMD=${CMDS[@]:i:CHUNK_SIZE}
+    ${EXECUTE_CMD} "${CMDS[@]:i:CHUNK_SIZE}"
 done
-#echo ${CMDS[@]}
-
-#for CMD in ${CMDS[@]}; do
-#    echo $CMD
-#done
-
-
-
-
-# Tape
-#for i in $(seq 1 $SEED_END); do $DEBUG python tape_dqn.py experiments/batch_sizes/cartpole_easy/tape_linattn.yaml -w -p 'rdqn_paper' -n "tape_linattn_$i" --seed $i; done
-
-# for i in $(seq 1 $SEED_END); do $DEBUG python tape_dqn.py experiments/batch_sizes/cartpole_easy/tape_ffm.yaml -w -p 'rdqn_paper' -n "tape_ffm_$i" --seed $i; done
-
-#for i in $(seq 1 $SEED_END); do $DEBUG python tape_dqn.py experiments/batch_sizes/cartpole_easy/tape_s5.yaml -w -p 'rdqn_paper' -n "tape_s5_$i" --seed $i; done
-
-#for i in $(seq 1 $SEED_END); do $DEBUG python tape_dqn.py experiments/batch_sizes/cartpole_easy/tape_lru.yaml -w -p 'rdqn_paper' -n "tape_lru_$i" --seed $i; done
-
-# Segment
-#for bs in ${BATCH_SIZES[@]}; do
-    #for i in $(seq 1 $SEED_END); do $DEBUG python segment_dqn.py experiments/batch_sizes/cartpole_easy/segment_linattn_${bs}.yaml -w -p 'rdqn_paper' -n "segment_linattn_${bs}_${i}" --seed $i; done
-
-    # Segment FFM
-    #for i in $(seq 1 $SEED_END); do $DEBUG python segment_dqn.py experiments/batch_sizes/cartpole_easy/segment_ffm_${bs}.yaml -w -p 'rdqn_paper' -n "segment_ffm_${bs}_${i}" --seed $i; done
-
-    # S5
-    #for i in $(seq 1 $SEED_END); do $DEBUG python segment_dqn.py experiments/batch_sizes/cartpole_easy/segment_s5_${bs}.yaml -w -p 'rdqn_paper' -n "segment_s5_${bs}_${i}" --seed $i; done
-
-    # LRU
-    #for i in $(seq 1 $SEED_END); do $DEBUG python segment_dqn.py experiments/batch_sizes/cartpole_easy/segment_lru_${bs}.yaml -w -p 'rdqn_paper' -n "segment_lru_${bs}_${i}" --seed $i; done
-
-#done

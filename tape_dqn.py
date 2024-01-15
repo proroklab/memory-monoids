@@ -28,7 +28,7 @@ from memory.lru import StackedLRU
 from memory.s5 import StackedS5
 
 from utils import get_wandb_model_info, load_popgym_env
-from losses import tape_dqn_loss, tape_dqn_loss_filtered, tape_ddqn_loss, tape_update
+from losses import tape_dqn_loss, tape_ddqn_loss_filtered, tape_ddqn_loss, tape_update
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLinearAttention.name: StackedLinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
 
@@ -185,7 +185,8 @@ for epoch in range(1, epochs + 1):
 
         # Compute BPTT grads
         if args.log_grads:
-            jac = eqx.filter_jit(eqx.filter_grad(tape_dqn_loss_filtered))(eval_transitions["observation"], q_eval, q_target, eval_transitions, gamma, eval_key)
+            breakpoint()
+            jac = eqx.filter_jit(eqx.filter_grad(tape_ddqn_loss_filtered))(eval_transitions["observation"], q_eval, q_target, eval_transitions, gamma, eval_key)
             temporal_grad = jac.sum(-1)
             grad_info = {"grads/terminal_dloss_dx": temporal_grad}
 

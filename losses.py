@@ -101,22 +101,25 @@ def segment_dqn_loss(q_network, q_target, segment, gamma, key):
     target_network_mean = masked_mean(next_q, segment['mask'])
     return loss, (q_mean, target_mean, target_network_mean, error_min, error_max)
 
-def tape_dqn_loss_filtered(obs, q_network, q_target, tape, gamma, key):
+def tape_ddqn_loss_filtered(obs, q_network, q_target, tape, gamma, key):
     B = tape["next_reward"].shape[0]
+    batch_idx = jnp.arange(B)
     initial_state = q_network.initial_state()
     q_values, _ = q_network(
-        obs, initial_state, tape["start"], tape["next_done"], key=key
+        tape["observation"], initial_state, tape["start"], tape["next_done"], key=key
     )
     batch_index = jnp.arange(B)
     selected_q = q_values.squeeze(0)[batch_index, tape["action"]]
 
-    next_q_target, _ = jax.lax.stop_gradient(q_target(
+    next_q_action_idx, _ = jax.lax.stop_gradient(q_network(
         tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
     ))
-    next_q = next_q_target.squeeze(0).max(-1)
+    next_q, _ = jax.lax.stop_gradient(q_target(
+        tape["next_observation"], initial_state, tape["start"], tape["next_done"], key
+    ))
+    next_q = next_q.squeeze(0)[batch_idx, next_q_action_idx.argmax(-1).flatten()] 
 
-    done = jnp.logical_or(tape['next_terminated'], tape['next_truncated'])
-    target = tape["next_reward"] + (1.0 - done) * gamma * next_q 
+    target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
     error = selected_q[-1] - target[-1]
     loss = huber(error)
     return loss

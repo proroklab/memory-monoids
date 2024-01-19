@@ -39,7 +39,6 @@ model:
     input_size: 256
     key_size: 16
     value_size: 16
-    n_layers: 2
 
 eval:
   interval: 10

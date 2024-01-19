@@ -44,6 +44,9 @@ a.add_argument('--log-model', '-m', action="store_true")
 a.add_argument('--log-grads', '-g', action="store_true")
 args = a.parse_args()
 
+if args.log_grads:
+    grad_table = None
+
 with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
@@ -185,10 +188,16 @@ for epoch in range(1, epochs + 1):
 
         # Compute BPTT grads
         if args.log_grads:
-            breakpoint()
-            jac = eqx.filter_jit(eqx.filter_grad(tape_ddqn_loss_filtered))(eval_transitions["observation"], q_eval, q_target, eval_transitions, gamma, eval_key)
-            temporal_grad = jac.sum(-1)
-            grad_info = {"grads/terminal_dloss_dx": temporal_grad}
+            jac = eqx.filter_jit(eqx.filter_grad(tape_ddqn_loss_filtered))(eval_transitions["observation"].astype(jnp.float32), q_eval, q_target, eval_transitions, gamma, eval_key)
+            temporal_grad = jnp.abs(jac).sum(-1)
+            if grad_table is None:
+                grad_table = wandb.Table(columns=np.arange(0, -temporal_grad.size, -1).tolist())
+            
+            grad_table.add_data(*temporal_grad.tolist())
+            #jac = tape_ddqn_loss_filtered(eval_transitions["observation"].astype(jnp.float32), q_eval, q_target, eval_transitions, gamma, eval_key)
+            #columns = []
+            #table = wandb.Table()
+            #grad_info = {"grads/terminal_dloss_dx": temporal_grad}
 
 
     if args.wandb:
@@ -197,7 +206,7 @@ for epoch in range(1, epochs + 1):
 
         to_log = {
             **{k: v.item() for k, v in model_info.items() if args.log_model},
-            **grad_info,
+            #**grad_info,
             "collect/epoch": epoch,
             #"collect/action_hist": action_hist,
             "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),
@@ -238,3 +247,6 @@ for epoch in range(1, epochs + 1):
         + f"qm: {q_mean:.2f} "
         + f"tm: {target_mean:.2f} "
     )
+
+if args.log_grads:
+    wandb.log({"temporal_grad_table": grad_table})

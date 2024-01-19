@@ -106,7 +106,7 @@ def tape_ddqn_loss_filtered(obs, q_network, q_target, tape, gamma, key):
     batch_idx = jnp.arange(B)
     initial_state = q_network.initial_state()
     q_values, _ = q_network(
-        tape["observation"], initial_state, tape["start"], tape["next_done"], key=key
+        obs, initial_state, tape["start"], tape["next_done"], key=key
     )
     batch_index = jnp.arange(B)
     selected_q = q_values.squeeze(0)[batch_index, tape["action"]]

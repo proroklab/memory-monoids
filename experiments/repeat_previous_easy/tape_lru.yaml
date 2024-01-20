@@ -4,6 +4,9 @@ collect:
   env: "popgym.envs.RepeatPreviousEasy"
   popgym_env: True
   env_prev_action: False
+  env_kwargs: 
+    num_decks: 2
+    k: 10
   epochs: 5_000
   random_epochs: 5_000
   eps_start: 0.2

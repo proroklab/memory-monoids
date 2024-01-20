@@ -191,13 +191,9 @@ for epoch in range(1, epochs + 1):
             jac = eqx.filter_jit(eqx.filter_grad(tape_ddqn_loss_filtered))(eval_transitions["observation"].astype(jnp.float32), q_eval, q_target, eval_transitions, gamma, eval_key)
             temporal_grad = jnp.abs(jac).sum(-1)
             if grad_table is None:
-                grad_table = wandb.Table(columns=np.arange(0, -temporal_grad.size, -1).tolist())
+                grad_table = wandb.Table(columns=np.arange(-temporal_grad.size + 1, 1).tolist())
             
             grad_table.add_data(*temporal_grad.tolist())
-            #jac = tape_ddqn_loss_filtered(eval_transitions["observation"].astype(jnp.float32), q_eval, q_target, eval_transitions, gamma, eval_key)
-            #columns = []
-            #table = wandb.Table()
-            #grad_info = {"grads/terminal_dloss_dx": temporal_grad}
 
 
     if args.wandb:
@@ -250,3 +246,8 @@ for epoch in range(1, epochs + 1):
 
 if args.log_grads:
     wandb.log({"temporal_grad_table": grad_table})
+    import time
+    name = args.name
+    if name is None:
+        name == str(time.time())
+    grad_table.get_dataframe().to_csv(name + "_grads.csv")

@@ -23,7 +23,7 @@ from modules import epsilon_greedy_policy, anneal, RecurrentQNetwork, hard_updat
 from memory.gru import GRU
 from memory.sffm import NSFFM, SFFM
 from utils import get_wandb_model_info, load_popgym_env, scale_by_norm
-from losses import segment_ddqn_loss, segment_dqn_loss, segment_update
+from losses import segment_ddqn_loss, segment_ddqn_loss_filtered, segment_dqn_loss, segment_update
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
 
@@ -38,6 +38,9 @@ a.add_argument('--load', '-l', type=str, default=None)
 a.add_argument('--log-model', '-m', action="store_true")
 a.add_argument('--log-grads', '-g', action="store_true")
 args = a.parse_args()
+
+if args.log_grads:
+    grad_table = None
 
 with open(args.config) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
@@ -173,7 +176,12 @@ for epoch in range(1, epochs + 1):
 
         # Compute BPTT grads
         if args.log_grads:
-            raise NotImplementedError()
+            jac = eqx.filter_jit(eqx.filter_grad(segment_ddqn_loss_filtered))(eval_transitions["observation"].astype(jnp.float32), q_eval, q_target, eval_transitions, gamma, eval_key)
+            temporal_grad = jac.sum(-1).squeeze(0)
+            if grad_table is None:
+                grad_table = wandb.Table(columns=np.arange(-temporal_grad.size + 1, 1).tolist())
+            
+            grad_table.add_data(*temporal_grad.tolist())
 
 
     if args.wandb:
@@ -222,3 +230,11 @@ for epoch in range(1, epochs + 1):
         + f"qm: {q_mean:.2f} "
         + f"tm: {target_mean:.2f} "
     )
+
+if args.log_grads:
+    wandb.log({"temporal_grad_table": grad_table})
+    import time
+    name = args.name
+    if name is None:
+        name == str(time.time())
+    grad_table.get_dataframe().to_csv(name + "_grads.csv")

@@ -127,7 +127,7 @@ def segment_ddqn_loss_filtered(obs, q_network, q_target, segment, gamma, key):
 
     target = segment["next_reward"] + (1.0 - segment["next_terminated"]) * gamma * next_q
     # Only called during eval with a single segment, so masking not necessary
-    error = selected_q[0, -1] - target[0, -1]
+    error = selected_q[0, -1]# - target[0, -1]
     return jnp.abs(error)
 
 def tape_ddqn_loss_filtered(obs, q_network, q_target, tape, gamma, key):
@@ -149,7 +149,7 @@ def tape_ddqn_loss_filtered(obs, q_network, q_target, tape, gamma, key):
     next_q = next_q.squeeze(0)[batch_idx, next_q_action_idx.argmax(-1).flatten()] 
 
     target = tape["next_reward"] + (1.0 - tape["next_terminated"]) * gamma * next_q 
-    error = selected_q[-1] - target[-1]
+    error = selected_q[-1]# - target[-1]
     return jnp.abs(error)
 
 

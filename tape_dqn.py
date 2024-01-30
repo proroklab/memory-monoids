@@ -1,26 +1,21 @@
-from functools import partial
 from jax import numpy as jnp
-from jax import vmap, jit, random
+from jax import random
 import jax
 import numpy as np
-from jax import random, vmap, nn
+from jax import random
 import time
 
-# from cpprb import ReplayBuffer
 from buffer import TapeBuffer
 from collector.tape_collector import TapeCollector
 
-# import flax
-# from flax import linen as nn
 import equinox as eqx
-from modules import greedy_policy, hard_update, soft_update, RecurrentQNetwork
+from modules import greedy_policy, RecurrentQNetwork
 import optax
 import tqdm
 import argparse
 import yaml
 
-from modules import epsilon_greedy_policy, anneal, boltzmann_policy, mean_noise
-from memory.gru import GRU
+from modules import epsilon_greedy_policy, anneal
 from memory.sffm import SFFM, NSFFM
 from memory.ffm import FFM
 from memory.linear_transformer import LinearAttention, StackedLinearAttention
@@ -28,9 +23,9 @@ from memory.lru import StackedLRU
 from memory.s5 import StackedS5
 
 from utils import get_wandb_model_info, load_popgym_env
-from losses import tape_dqn_loss, tape_ddqn_loss_filtered, tape_ddqn_loss, tape_update
+from losses import tape_ddqn_loss_filtered, tape_update
 
-model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLinearAttention.name: StackedLinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
+model_map = {SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLinearAttention.name: StackedLinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)

@@ -19,12 +19,11 @@ from memory.lru import StackedLRU
 from memory.s5 import StackedS5
 
 from modules import epsilon_greedy_policy, anneal, RecurrentQNetwork, greedy_policy
-from memory.gru import GRU
 from memory.sffm import NSFFM, SFFM
 from utils import get_wandb_model_info, load_popgym_env
 from losses import segment_update, tape_ddqn_loss_filtered
 
-model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
+model_map = {SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
 
 a = argparse.ArgumentParser()
 a.add_argument("config", type=str)

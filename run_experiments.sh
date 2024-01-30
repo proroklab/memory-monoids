@@ -1,21 +1,26 @@
 #!/bin/bash
+SER_DIR=/rds/user/sm2558/hpc-work/repos/ser
+
 SEED_START=${SEED_START:-1}
 SEED_END=${SEED_END:-10}
 # Use as BATCH_SIZES="100_1 200_2"
 BATCH_SIZES=${BATCH_SIZES:-"10_100 20_50 50_20 100_10"} 
-ROOT_DIR=${ROOT_DIR:-./}
+ROOT_DIR=${ROOT_DIR:-$SER_DIR}
 CONFIG_DIR=${CONFIG_DIR:-cartpole_easy}
 MODELS=${MODELS:-"linattn ffm s5 lru"}
 TYPES=${TYPES:-"tape segment"}
 WANDB_GROUP=${WANDB_GROUP:-"rdqn_paper"}
-XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.2}
+#XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.2}
 CHUNK_SIZE=${CHUNK_SIZE:-4}
-CMD_DELIM=${SERIAL:-";"} # Use ; or & to do serial or parallel
+CMD_DELIM=${CMD_DELIM:-";"} # Use ; or & to do serial or parallel
 # Set to echo for debug
-EXECUTE_CMD=${EXECUTE:-echo}
+# EXECUTE_CMD=${EXECUTE:-echo}
 # Or for the real thing
-#EXECUTE_CMD=sbatch /home/sm2558/ser_paper/experiment.wilkes
+EXECUTE_CMD=${EXECUTE_CMD:-"sbatch /home/sm2558/ser_paper/experiment.peta4-icelake"}
 DEBUG=${DEBUG:-}
+SLEEP=${SLEEP:-1}
+#DEBUG="conda run -p /rds/user/sm2558/hpc-work/conda_envs/ser"
+
 
 
 # String to list
@@ -39,8 +44,20 @@ for SEED in $(seq $SEED_START $SEED_END); do
         done
     done
 done
+
+
+EXP_DIR=/home/sm2558/ser_paper/job_scripts/
+rm -r "${EXP_DIR}"
+mkdir "${EXP_DIR}"
 for ((i=0; i<${#CMDS[@]}; i+=CHUNK_SIZE)); do
-    # slice of array
-    #export CURRENT_CMD=${CMDS[@]:i:CHUNK_SIZE}
-    ${EXECUTE_CMD} "${CMDS[@]:i:CHUNK_SIZE}"
+    IDX=$(printf "%03d" ${i})
+    FNAME="${EXP_DIR}/exp_${IDX}.sh"
+    touch "${FNAME}"
+    # Required if parallel (&)
+    #echo "${CMDS[@]:i:CHUNK_SIZE}" 'true; wait $(jobs -p)' >> "${FNAME}"
+    echo "${CMDS[@]:i:CHUNK_SIZE}" >> "${FNAME}"
+    chmod a+x "${FNAME}"
+    export EXEC_PATH="${FNAME}"
+    ${EXECUTE_CMD}
+    sleep ${SLEEP}
 done

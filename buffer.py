@@ -95,141 +95,17 @@ class TapeBuffer(ReplayBuffer):
         buffer_size: int,
         start_key: str,
         schema: Dict[str, np.shape],
-        seek_to_start=True,
-        #shuffle_interval=200,
-        swap_iters=1,
     ):
         super().__init__(buffer_size, schema)
         self.start_key = start_key
-        self.seek_to_start = seek_to_start
-        self.swap_iters = swap_iters
-        #self.shuffle_interval = shuffle_interval
         self.transition_counter = 0
-        if self.seek_to_start:
-            self.episode_starts = deque()
-        #if shuffle_interval is not None:
-        #    self.last_shuffle_at = 0
+        self.episode_starts = deque()
         assert self.data[start_key].ndim == 1
-
-    def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
-        out = {}
-        # TODO: Should not sample between ptr and the next index
-        # This region is guaranteed to be corrupted
-        # start_idx = random.choice(self.episode_starts)
-        assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
-        # if self.shuffle_interval is not None and self.last_shuffle_at <= self.shuffle_interval:
-        #     print("Shuffling buffer")
-        #     self.shuffle(key)
-        #     self.last_shuffle_at = self.transition_counter
-
-        rng = np.random.default_rng(jax.random.bits(key).item())
-        if self.seek_to_start:
-            #start_idx = jax.random.choice(key, np.array(self.episode_starts))
-            start_idx = rng.choice(np.array(self.episode_starts))
-        else:
-            #start_idx = jax.random.choice(key, self.size)
-            start_idx = rng.randint(self.size)
-        idx = np.arange(start_idx, start_idx + size) % self.size
-        for k, v in self.data.items():
-            out[k] = v[idx]
-        return out
-
-    def swap(self, key) -> None:
-        # Shuffle two consecutive elements
-        # Don't shuffle the very last element or the second to last element
-        if len(self.episode_starts) < 4:
-            return
-
-        rng = np.random.default_rng(jax.random.bits(key).item())
-        if self.swap_iters == "auto":
-            r = range(int(np.log2(self.size)))
-        else:
-            r = range(self.swap_iters)
-        for _ in r:
-            idx = rng.integers(len(self.episode_starts) - 1 - 2)
-            idx_a, idx_b, idx_c = self.episode_starts[idx], self.episode_starts[idx + 1], self.episode_starts[idx + 2]
-            idxs_a = np.arange(idx_a, idx_b)
-            idxs_b = np.arange(idx_b, idx_c)
-
-            src_idx = np.concatenate([idxs_a, idxs_b])
-            sink_idx = np.concatenate([idxs_b, idxs_a])
-            for k in self.data:
-                self.data[k][src_idx] = self.data[k][sink_idx]
-            
-            #assert self.data[self.start_key][idx_a] == True
-            #assert self.data['next_done'][idx_c - 1] == True
-
-            #self.episode_starts[idx] = idx_b - idx_a
-            self.episode_starts[idx + 1] = idx_c - idx_b + idx_a
-
-        
-    def shuffle(self, key) -> None:
-        # Shuffle all elements except for the last one,
-        # as it could be a partial fragment
-        rng = np.random.default_rng(jax.random.bits(key).item())
-        starts_to_shuffle = list(self.episode_starts)[:-1]
-        frag_starts, frag_ends = starts_to_shuffle[:-1], starts_to_shuffle[1:]
-        boundaries = np.array([frag_starts, frag_ends])
-        rng.shuffle(boundaries, axis=1)
-        starts, ends = boundaries[0], boundaries[1]
-        lens = ends - starts
-        breakpoint()
-        shuffled_idx = np.repeat(ends - lens.cumsum(), 1) + np.arange(lens.sum())
-
-        for k in self.data:
-            shuffled_data = np.take_along_axis(shuffled_idx, 0, self.data[k][starts_to_shuffle])
-            data = np.concatenate([shuffled_data, self.data[starts_to_shuffle[-1]:]])
-            self.data[k] = data
-        
-        # Finally set shuffled index
-        self.episode_starts = deque(starts + ends[-1:] + self.episode_starts[:-1])
-
-    def add(self, key, **data) -> None:
-        data, batch_size = self.validate_inputs(data)
-
-        idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
-
-        if self.seek_to_start:
-            # TODO: We need to zero the data after the episode starts?
-            # Or what happens? We will replay a partial episode
-            # At most 1 partial episode will exist, can we ignore it?
-
-            # Find starts that we are going to overwrite
-            # and remove them from the list
-            if len(self.episode_starts) > 0 and (self.size + batch_size) >= self.max_size: 
-                while True:
-                    if self.episode_starts[0] >= self.ptr and self.episode_starts[0] < self.ptr + batch_size:
-                        self.episode_starts.popleft()
-                    else:
-                        break
-
-            new_starts = self.ptr + np.flatnonzero(data[self.start_key])
-            self.episode_starts.extend(new_starts.tolist())
-
-        self.ptr = (self.ptr + batch_size) % self.max_size
-        self.transition_counter += batch_size
-        self.size = min(self.transition_counter, self.max_size)
-
-        for k, v in data.items():
-            self.data[k][idx] = np.array(v, copy=False)
-
-class ShuffledTapeBuffer(TapeBuffer):
-    def __init__(
-        self,
-        buffer_size: int,
-        start_key: str,
-        schema: Dict[str, np.shape],
-        seek_to_start=True,
-        #shuffle_interval=200,
-        swap_iters=1,
-    ):
-        super().__init__(buffer_size, start_key, schema, seek_to_start, swap_iters=0)
 
     def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
         out = {k: [] for k in self.data}
         rng = np.random.default_rng(jax.random.bits(key).item())
         count = 0
-        #while len(sample_idxs) < size:
         while count < size:
             start_idx = rng.integers(len(self.episode_starts) - 1 - 1)
             start = self.episode_starts[start_idx]
@@ -239,31 +115,33 @@ class ShuffledTapeBuffer(TapeBuffer):
                 out[k].append(v[start:end])
         return {k: np.concatenate(v)[:size] for k, v in out.items()}
 
-    # def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
-    #     out = {k: [] for k in self.data}
-    #     assert self.size >= size, f"Buffer size {self.size} is less than sample size {size}"
-    #     rng = np.random.default_rng(jax.random.bits(key).item())
-    #     sample_idxs = []
-    #     count = 0
-    #     #while len(sample_idxs) < size:
-    #     while count < size:
-    #         start_idx = rng.integers(len(self.episode_starts) - 1 - 1)
-    #         start = self.episode_starts[start_idx]
-    #         end = self.episode_starts[start_idx + 1]
-    #         count += end - start
-    #         for k, v in self.data.items():
-    #             out[k].append(v[start:end])
-    #     return {k: np.concatenate(v)[:size] for k, v in out.items()}
+    def add(self, **data) -> None:
+        data, batch_size = self.validate_inputs(data)
 
-        #     sample_idxs.append(
-        #         np.arange(start, end)
-        #     )
+        idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
 
-        # sample_idxs = np.concatenate(sample_idxs)[:size]
-        # for k, v in self.data.items():
-        #     out[k] = v[sample_idxs]
-        # return out
+        # TODO: We need to zero the data after the episode starts?
+        # Or what happens? We will replay a partial episode
+        # At most 1 partial episode will exist, can we ignore it?
 
+        # Find starts that we are going to overwrite
+        # and remove them from the list
+        if len(self.episode_starts) > 0 and (self.size + batch_size) >= self.max_size: 
+            while True:
+                if self.episode_starts[0] >= self.ptr and self.episode_starts[0] < self.ptr + batch_size:
+                    self.episode_starts.popleft()
+                else:
+                    break
+
+        new_starts = self.ptr + np.flatnonzero(data[self.start_key])
+        self.episode_starts.extend(new_starts.tolist())
+
+        self.ptr = (self.ptr + batch_size) % self.max_size
+        self.transition_counter += batch_size
+        self.size = min(self.transition_counter, self.max_size)
+
+        for k, v in data.items():
+            self.data[k][idx] = np.array(v, copy=False)
 
 if __name__ == "__main__":
     b = TapeBuffer(

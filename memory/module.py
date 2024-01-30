@@ -21,7 +21,7 @@ class MemoryModule(eqx.Module):
         An inner function that given the previous recurrent state and observations, computes the next recurrent state.
         This should call wrapped_associative_update internally.
 
-    4. __call__: H x O -> S
+    4. __call__: O x H -> S x H
         An outer function that takes an observation and previous recurrent state and computes the markov state.
         This function should call aggregate internally.
     """
@@ -29,11 +29,9 @@ class MemoryModule(eqx.Module):
     def __call__(self, x: Array, state: Array, start: Array, next_done: Array, key: PRNGKey=None) -> Union[Array, List[Array]]:
         """Forward pass of the model, which should call aggregate.
 
-        This is known as f in the paper:
-        H x O -> S."""
+        This is known as M in the paper:
+        O x H -> S x H."""
         return NotImplementedError()
-        state = self.inner(x, state)
-        markov_state = self.outer(x, state)
 
     def initial_state(self, shape: Tuple[int, ...] = tuple()) -> List[Array]:
         """Return the recurrent state for the beginning of a sequence.

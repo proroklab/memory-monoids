@@ -1,0 +1,9 @@
+popgym 
+wandb 
+equinox 
+optax 
+numpy 
+gymnasium 
+tqdm
+jaxlib
+jax 

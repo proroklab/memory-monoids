@@ -40,15 +40,11 @@ model:
     trace_size: 64
     context_size: 4
     output_size: 256
-    # dropout: 0.01
-    # num_blocks: 1
 
 eval:
   interval: 10
   episodes: 20
   collect:
-    env: "popgym.envs.VelocityOnlyCartPoleEasy"
-    popgym_env: True
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

@@ -1,7 +1,7 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.RepeatPrevious"
+  env: "popgym.envs.RepeatPreviousEasy"
   popgym_env: True
   env_prev_action: False
   env_kwargs: 
@@ -43,15 +43,11 @@ model:
     trace_size: 16
     context_size: 16
     output_size: 256
-    # dropout: 0.01
-    # num_blocks: 1
 
 eval:
   interval: 10
   episodes: 20
   collect:
-    env: "popgym.envs.RepeatPreviousEasy"
-    popgym_env: True
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

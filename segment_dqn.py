@@ -1,10 +1,9 @@
-from functools import partial
 import time
 from jax import numpy as jnp
-from jax import vmap, jit, random
+from jax import random
 import jax
 import numpy as np
-from jax import random, vmap, nn
+from jax import random
 
 from buffer import ReplayBuffer
 
@@ -19,11 +18,11 @@ from memory.linear_transformer import LinearAttention
 from memory.lru import StackedLRU
 from memory.s5 import StackedS5
 
-from modules import epsilon_greedy_policy, anneal, RecurrentQNetwork, hard_update, soft_update, greedy_policy
+from modules import epsilon_greedy_policy, anneal, RecurrentQNetwork, greedy_policy
 from memory.gru import GRU
 from memory.sffm import NSFFM, SFFM
-from utils import get_wandb_model_info, load_popgym_env, scale_by_norm
-from losses import segment_ddqn_loss, segment_ddqn_loss_filtered, segment_dqn_loss, segment_update
+from utils import get_wandb_model_info, load_popgym_env
+from losses import segment_update, tape_ddqn_loss_filtered
 
 model_map = {GRU.name: GRU, SFFM.name: SFFM, NSFFM.name: NSFFM, FFM.name: FFM, LinearAttention.name: LinearAttention, StackedLRU.name: StackedLRU, StackedS5.name: StackedS5}
 
@@ -176,23 +175,23 @@ for epoch in range(1, epochs + 1):
 
         # Compute BPTT grads
         if args.log_grads:
-            jac = eqx.filter_jit(eqx.filter_grad(segment_ddqn_loss_filtered))(eval_transitions["observation"].astype(jnp.float32), q_eval, q_target, eval_transitions, gamma, eval_key)
-            temporal_grad = jac.sum(-1).squeeze(0)
+            masked = {k: v[eval_transitions["mask"]] for k, v in eval_transitions.items()}
+            # Use tape loss cuz 1d after masking
+            jac = eqx.filter_jit(eqx.filter_grad(tape_ddqn_loss_filtered))(masked['observation'].astype(jnp.float32),q_eval, q_target,masked,gamma, eval_key)
+            temporal_grad = jnp.abs(jac).sum(-1)
             if grad_table is None:
                 grad_table = wandb.Table(columns=np.arange(-temporal_grad.size + 1, 1).tolist())
-            
+                #grad_table = wandb.Table(columns=np.arange(-199, 1).tolist())
+
+            #temporal_grad = jnp.concatenate([jnp.zeros(200 - temporal_grad.size), temporal_grad])
             grad_table.add_data(*temporal_grad.tolist())
 
 
     if args.wandb:
-#        action_hist = np.histogram(transitions["action"], bins=np.arange(act_shape + 1))
-#        action_hist = wandb.Histogram(np_histogram=action_hist)
-
         to_log = {
             **{k: v.item() for k, v in model_info.items() if args.log_model},
             **grad_info,
             "collect/epoch": epoch,
-            #"collect/action_hist": action_hist,
             "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),
             "collect/reward": cumulative_reward,
             "collect/best_reward": best_ep_reward,

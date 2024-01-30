@@ -46,8 +46,6 @@ eval:
   interval: 10
   episodes: 20
   collect:
-    env: "popgym.envs.RepeatFirstEasy"
-    popgym_env: True
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

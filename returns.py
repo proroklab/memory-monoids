@@ -6,7 +6,7 @@ import pandas as pd
 
 
 episode_lengths = [10, 100, 1000]
-batch_sizes = [10, 100, 1000]
+batch_sizes = [10, 50, 100, 500, 1000, 10_000]
 gamma = 0.99
 
 @jax.jit

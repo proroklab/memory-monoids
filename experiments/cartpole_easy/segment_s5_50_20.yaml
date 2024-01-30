@@ -47,8 +47,6 @@ eval:
   interval: 10
   episodes: 20
   collect:
-    env: "popgym.envs.PositionOnlyCartPoleEasy"
-    popgym_env: True
     segment_length: 200
     random_epochs: 0
     eps_start: 0.0

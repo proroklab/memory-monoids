@@ -7,7 +7,7 @@ from jax import random, vmap, nn
 import time
 
 # from cpprb import ReplayBuffer
-from buffer import TapeBuffer, ShuffledTapeBuffer
+from buffer import TapeBuffer
 from collector.tape_collector import TapeCollector
 
 # import flax
@@ -92,7 +92,7 @@ opt = optax.chain(
 )
 
 
-rb = ShuffledTapeBuffer(
+rb = TapeBuffer(
     config["buffer"]["size"],
     "start",
     {
@@ -112,7 +112,6 @@ rb = ShuffledTapeBuffer(
         "next_done": {"shape": (), "dtype": bool},
         "episode_id": {"shape": (), "dtype": np.int64},
     },
-    swap_iters=config["buffer"]["swap_iters"],
 )
 
 
@@ -152,7 +151,7 @@ for epoch in range(1, epochs + 1):
             best_ep_reward
         ) = collector(q_network, eqx.filter_jit(epsilon_greedy_policy), jnp.array(progress), epoch_key, False)
 
-        rb.add(epoch_key, **transitions)
+        rb.add(**transitions)
         rb.on_episode_end()
         if epoch <= config["collect"]["random_epochs"]:
             break
@@ -192,19 +191,16 @@ for epoch in range(1, epochs + 1):
             temporal_grad = jnp.abs(jac).sum(-1)
             if grad_table is None:
                 grad_table = wandb.Table(columns=np.arange(-temporal_grad.size + 1, 1).tolist())
-            
+                #grad_table = wandb.Table(columns=np.arange(-199, 1).tolist())
+
+            #temporal_grad = jnp.concatenate([jnp.zeros(200 - temporal_grad.size), temporal_grad])
             grad_table.add_data(*temporal_grad.tolist())
 
 
     if args.wandb:
-#        action_hist = np.histogram(transitions["action"], bins=np.arange(act_shape + 1))
-#        action_hist = wandb.Histogram(np_histogram=action_hist)
-
         to_log = {
             **{k: v.item() for k, v in model_info.items() if args.log_model},
-            #**grad_info,
             "collect/epoch": epoch,
-            #"collect/action_hist": action_hist,
             "collect/train_epoch": max(0, epoch - config["collect"]["random_epochs"]),
             "collect/reward": cumulative_reward,
             "collect/best_reward": best_ep_reward,
@@ -232,7 +228,6 @@ for epoch in range(1, epochs + 1):
             "train/gamma": gamma,
         }
         wandb.log(to_log)
-    #to_log = {k: v for k, v in to_log.items() if jnp.isfinite(v)}
 
     pbar.set_description(
         f"eval: {eval_ep_reward:.2f}, {best_eval_ep_reward:.2f} "

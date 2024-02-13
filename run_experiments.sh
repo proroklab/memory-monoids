@@ -1,5 +1,6 @@
 #!/bin/bash
-SER_DIR=/rds/user/sm2558/hpc-work/repos/ser
+SER_DIR=/path/to/project/directory/
+EXP_DIR=/path/to/job_scripts/
 
 SEED_START=${SEED_START:-1}
 SEED_END=${SEED_END:-10}
@@ -16,10 +17,9 @@ CMD_DELIM=${CMD_DELIM:-";"} # Use ; or & to do serial or parallel
 # Set to echo for debug
 # EXECUTE_CMD=${EXECUTE:-echo}
 # Or for the real thing
-EXECUTE_CMD=${EXECUTE_CMD:-"sbatch /home/sm2558/ser_paper/experiment.peta4-icelake"}
+EXECUTE_CMD=${EXECUTE_CMD:-"sbatch your_slurm_submission_script"}
 DEBUG=${DEBUG:-}
 SLEEP=${SLEEP:-1}
-#DEBUG="conda run -p /rds/user/sm2558/hpc-work/conda_envs/ser"
 
 
 
@@ -46,7 +46,6 @@ for SEED in $(seq $SEED_START $SEED_END); do
 done
 
 
-EXP_DIR=/home/sm2558/ser_paper/job_scripts/
 rm -r "${EXP_DIR}"
 mkdir "${EXP_DIR}"
 for ((i=0; i<${#CMDS[@]}; i+=CHUNK_SIZE)); do

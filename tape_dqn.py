@@ -62,7 +62,7 @@ if args.wandb:
 
 env = load_popgym_env(config)
 eval_env = load_popgym_env(config, eval=True)
-obs_shape = env.observation_space.shape[0]
+obs_shape = env.observation_space.shape
 act_shape = env.action_space.n
 
 key = random.PRNGKey(config["seed"])
@@ -74,11 +74,6 @@ lr_schedule = optax.warmup_cosine_decay_schedule(
     decay_steps=config['collect']['epochs'] * config["train"]["train_ratio"],
     end_value=config["train"]["lr_end"]
 )
-# lr_schedule = optax.linear_schedule(
-#     init_value=0,
-#     end_value=config["train"]["lr"], 
-#     transition_steps=config["train"]["warmup_epochs"] * config["train"]["train_ratio"],
-# )
 
 opt = optax.chain(
     optax.zero_nans(),

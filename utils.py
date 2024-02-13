@@ -29,22 +29,25 @@ def scale_by_norm(scale: float=1.0, eps: float=1e-6):
   return optax.GradientTransformation(init_fn, update_fn)
 
 
-def load_popgym_env(config, eval=False, popgym=True):
-    if popgym:
+def load_popgym_env(config, eval=False):
+    if config["collect"]["popgym_env"]:
         module, cls = config["collect"]["env"].rsplit(".", 1)
         mod = importlib.import_module(module)
         instance = getattr(mod, cls)(**config["collect"].get("env_kwargs", {}))
+        if config["collect"]["env_prev_action"]:
+            instance = PreviousAction(instance)
+        instance = Flatten(Antialias(instance))
+        if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
+            instance = DiscreteAction(instance)
     else:
-        instance = gym.make(config["collect"]["env"])
-    if config["collect"]["env_prev_action"]:
-        instance = PreviousAction(instance)
-    instance = Flatten(Antialias(instance))
-    if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
-        instance = DiscreteAction(instance)
+        instance = gym.make(config["collect"]["env"], **config["collect"].get("env_kwargs", {}))
+    if config["collect"].get("atari_env") and config["model"].get("atari_cnn"):
+        instance = gym.wrappers.AtariPreprocessing(instance, frame_skip=1, scale_obs=True, terminal_on_life_loss=True)
+        instance.action_space.seed(config["seed"] + eval * 1000)
+        return instance
     instance.action_space.seed(config["seed"] + eval * 1000)
 
     return instance
-
 
 def filter_inf(log_dict):
     d = {}

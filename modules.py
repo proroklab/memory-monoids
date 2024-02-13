@@ -96,6 +96,37 @@ class QHead(eqx.Module):
         return V + (A - A.mean(axis=-1, keepdims=True))
         
 
+class AtariCNN(eqx.Module):
+    c0: nn.Conv2d
+    c1: nn.Conv2d
+    c2: nn.Conv2d
+    ln0: nn.LayerNorm
+    ln1: nn.LayerNorm
+    ln2: nn.LayerNorm
+    linear: nn.Linear
+
+    def __init__(self, output_size, key):
+        keys = random.split(key, 4)
+        self.c0 = nn.Conv2d(1, 32, kernel_size=8, stride=4, key=keys[0])
+        self.ln0 = nn.LayerNorm((32, 20, 20), use_weight=False, use_bias=False)
+        self.c1 = nn.Conv2d(32, 64, kernel_size=4, stride=2, key=keys[1])
+        self.ln1 = nn.LayerNorm((64, 9, 9), use_weight=False, use_bias=False)
+        self.c2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, key=keys[2])
+        self.ln2 = nn.LayerNorm((64, 7, 7), use_weight=False, use_bias=False)
+        self.linear = nn.Linear(7 * 7 * 64, output_size, key=keys[3])
+
+    def __call__(self, x, keys=None):
+        x = x.reshape(-1, 84, 84)
+        x = leaky_relu(self.ln0(self.c0(x)))
+        x = leaky_relu(self.ln1(self.c1(x)))
+        x = leaky_relu(self.ln2(self.c2(x)))
+        # x = leaky_relu(self.c0(x))
+        # x = leaky_relu(self.c1(x))
+        # x = leaky_relu(self.c2(x))
+        x = self.linear(x.flatten())
+        return x
+
+
 class RecurrentQNetwork(eqx.Module):
     """The core model used in experiments"""
     input_size: int
@@ -107,10 +138,14 @@ class RecurrentQNetwork(eqx.Module):
 
     def __init__(self, obs_shape, act_shape, memory_module, config, key):
         self.config = config
-        self.input_size = obs_shape
         self.output_size = act_shape
         keys = random.split(key, 4)
-        self.pre = eqx.filter_vmap(Block(obs_shape, config["mlp_size"], 0, keys[1]))
+        if config.get("atari_cnn"):
+            self.input_size = (84, 84)
+            self.pre = eqx.filter_vmap(AtariCNN(config["mlp_size"], keys[1]))
+        else:
+            [self.input_size] = obs_shape
+            self.pre = eqx.filter_vmap(Block(self.input_size, config["mlp_size"], 0, keys[1]))
         self.memory = memory_module
 
         ensemble_keys = random.split(keys[0], config["ensemble_size"])
@@ -142,6 +177,7 @@ class RecurrentQNetwork(eqx.Module):
 
     def initial_state(self, shape=tuple()):
         return self.memory.initial_state(shape)
+
 
 
 def mean_noise(network):

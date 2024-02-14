@@ -12,10 +12,9 @@ We propose a simple alternative that we call **Tape-Based Batching (TBB)**: coll
 
 With one long list, we resolve most issues caused by segment-based batching. We no longer need to truncate and pad, we no longer truncate backpropagation, and we can use non-recurrent loss functions (PPO, Q learning, etc) to train recurrent policies. Please see the paper (link forthcoming) for how we accomplish this, or look at `buffer.py` and `tape_dqn.py` to see how we implement this.
 
-We find that replacing SBB with TBB greatly improves sample efficiency across a number of models and environments (our approach is in blue, compared against segment-based batching with various segment lengths).
+We find that replacing SBB with TBB greatly improves sample efficiency across a number of models and [POPGym tasks](https://github.com/proroklab/popgym). Our approach is in blue, compared against segment-based batching with various segment lengths.
 
 <img src="figures/plots.png" width="400" height>
-
 
 
 ## Repository Structure
@@ -34,3 +33,6 @@ We find that replacing SBB with TBB greatly improves sample efficiency across a 
 - `run_experiments.sh` is a way to run many experiments at once
 - `requirements.txt` should contain necessary packages to run the scripts (without versions, to avoid dependency hell)
 - `requirements_freeze.txt` contains the exact dependency verions for the experiments (if `requirements.txt` does not work)
+
+## Citation
+Coming soon!

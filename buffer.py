@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import random
 from collections import deque
-import h5py
 
 
 class ReplayBuffer:
@@ -88,9 +87,6 @@ class ReplayBuffer:
 
     def get_density(self):
         return self.density if hasattr(self, 'density') else -1.0
-
-    def save(self, path: str):
-        f = h5py.File(path, 'w')
 
 
 class TapeBuffer(ReplayBuffer):

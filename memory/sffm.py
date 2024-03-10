@@ -74,20 +74,20 @@ class SFFM(MemoryModule):
         self.trace_size = trace_size
         self.context_size = context_size
 
-        k0, k1, k2, k3, k4 = jax.random.split(key, 5)
+        k0, k1, k2, k3, k4, k5 = jax.random.split(key, 6)
         self.W_trace = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k0))
         self.W_context = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k1))
         self.ffa_params = self.init_ffa(trace_size, context_size, key=k2)
         self.block0 = eqx.filter_vmap(RandomSequential([
             default_init(k3, nn.Linear(2 * trace_size * context_size, input_size, key=k3), scale=0.01),
             nn.LayerNorm((input_size,)),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout) if dropout != 0 else nn.Identity(),
             leaky_relu,
         ]))
         self.block1 = eqx.filter_vmap(RandomSequential([
             nn.Linear(input_size, input_size, key=k4),
             nn.LayerNorm((input_size,)),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout) if dropout != 0 else nn.Identity(),
             leaky_relu,
         ]))
 
@@ -97,17 +97,13 @@ class SFFM(MemoryModule):
     def __call__(
         self, x: jax.Array, state: jax.Array, start: jax.Array, next_done, key
     ) -> Tuple[jax.Array, jax.Array]:
-        pre = jnp.abs(jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x)))
-        pre = pre / jnp.sum(pre, axis=(-2,-1), keepdims=True)
+        pre = jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x))
         state = self.scan(pre, state, start)
         keys = jax.random.split(key, 2 * state.shape[0])
         s = state.reshape(state.shape[0], self.context_size * self.trace_size)
-        eps = s.real + (s.real==0 + jnp.sign(s.real)) * 0.01
-        s = s + eps
-        scaled = jnp.concatenate([
-            jnp.log(1 + jnp.abs(s)) * jnp.sin(jnp.angle(s)),
-            jnp.log(1 + jnp.abs(s)) * jnp.cos(jnp.angle(s)),
-        ], axis=-1)
+        # mobius transform
+        scaled = (s - 1j) / (s + 1j)
+        scaled = jnp.concatenate([s.real, s.imag], axis=-1)
         z = self.block0(scaled, keys[:state.shape[0]])
         z = self.block1(z, keys[state.shape[0]:])
         final_state = state[-1:]
@@ -117,7 +113,7 @@ class SFFM(MemoryModule):
         self, memory_size: int, context_size: int, min_period: int = 1, max_period: int = 10_000, *, key
     ) -> Tuple[jax.Array, jax.Array]:
         _, k1, k2 = jax.random.split(key, 3)
-        a_low = 1e-6
+        a_low = 0
         a_high = 0.1
         a = jax.random.uniform(k1, (memory_size,), minval=a_low, maxval=a_high)
         b = 2 * jnp.pi / jnp.exp(jax.random.uniform(k2, (context_size,), minval=jnp.log(min_period), maxval=jnp.log(max_period)))
@@ -166,7 +162,6 @@ class SFFM(MemoryModule):
         # x: [T, memory_size]
         # memory: [1, memory_size, context_size]
         T = x.shape[0]
-        #timestep = jnp.arange(T + 1, dtype=jnp.int32)
         timestep = jnp.ones(T + 1, dtype=jnp.int32).reshape(-1, 1, 1)
         # Add context dim
         start = start.reshape(T, 1, 1)

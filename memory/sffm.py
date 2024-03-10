@@ -74,7 +74,7 @@ class SFFM(MemoryModule):
         self.trace_size = trace_size
         self.context_size = context_size
 
-        k0, k1, k2, k3, k4, k5 = jax.random.split(key, 6)
+        k0, k1, k2, k3, k4 = jax.random.split(key, 5)
         self.W_trace = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k0))
         self.W_context = eqx.filter_vmap(nn.Linear(input_size, trace_size, use_bias=False, key=k1))
         self.ffa_params = self.init_ffa(trace_size, context_size, key=k2)
@@ -99,11 +99,9 @@ class SFFM(MemoryModule):
     ) -> Tuple[jax.Array, jax.Array]:
         pre = jnp.einsum("bi, bj -> bij", self.W_trace(x), self.W_context(x))
         state = self.scan(pre, state, start)
-        keys = jax.random.split(key, 2 * state.shape[0])
         s = state.reshape(state.shape[0], self.context_size * self.trace_size)
-        # mobius transform
-        scaled = (s - 1j) / (s + 1j)
         scaled = jnp.concatenate([s.real, s.imag], axis=-1)
+        keys = jax.random.split(key, 2 * state.shape[0])
         z = self.block0(scaled, keys[:state.shape[0]])
         z = self.block1(z, keys[state.shape[0]:])
         final_state = state[-1:]

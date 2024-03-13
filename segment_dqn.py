@@ -59,7 +59,7 @@ if args.wandb:
 
 env = load_popgym_env(config)
 eval_env = load_popgym_env(config, eval=True)
-obs_shape = env.observation_space.shape[0]
+obs_shape = env.observation_space.shape
 act_shape = env.action_space.n
 
 key = random.PRNGKey(config["seed"])
@@ -83,13 +83,13 @@ rb = ReplayBuffer(
     config["buffer"]["size"],
     {
         "observation": {
-            "shape": (config["collect"]["segment_length"], obs_shape),
+            "shape": (config["collect"]["segment_length"], *obs_shape),
             "dtype": np.float32,
         },
         "action": {"shape": config["collect"]["segment_length"], "dtype": np.int32},
         "next_reward": {"shape": config["collect"]["segment_length"], "dtype": np.float32},
         "next_observation": {
-            "shape": (config["collect"]["segment_length"], obs_shape),
+            "shape": (config["collect"]["segment_length"], *obs_shape),
             "dtype": np.float32,
         },
         "start": {"shape": config["collect"]["segment_length"], "dtype": bool},
@@ -130,13 +130,14 @@ for epoch in range(1, epochs + 1):
     progress = jnp.array(max(
         0, (epoch - config["collect"]["random_epochs"]) / config["collect"]["epochs"]
     ))
+    key, collect_key, sample_key, loss_key = random.split(key, 4)
     for _ in range(config["collect"]["ratio"]):
-        key, epoch_key, sample_key, loss_key = random.split(key, 4)
+        key, collect_key = random.split(key)
         (
             transitions,
             cumulative_reward,
             best_ep_reward
-        ) = collector(q_network, eqx.filter_jit(epsilon_greedy_policy), jnp.array(progress), epoch_key, False)
+        ) = collector(q_network, eqx.filter_jit(epsilon_greedy_policy), jnp.array(progress), collect_key, False)
 
         rb.add(**transitions)
         rb.on_episode_end()
@@ -149,7 +150,7 @@ for epoch in range(1, epochs + 1):
 
 
     for _ in range(config["train"]["train_ratio"]):
-        _, sample_key = random.split(sample_key)
+        key, sample_key, loss_key = random.split(key, 3)
         data = rb.sample(config["train"]["batch_size"], sample_key)
         transitions_trained += len(data['next_reward'])
         q_network, q_target, opt_state, q_mean, target_mean, target_network_mean, error_min, error_max, loss, gradient = eqx.filter_jit(segment_update)(q_network, q_target, data, opt, opt_state, gamma, 1 / config["train"]["target_delay"], loss_key)

@@ -94,6 +94,7 @@ class QHead(eqx.Module):
         A = self.advantage(x)
         # Dueling DQN
         return V + (A - A.mean(axis=-1, keepdims=True))
+
         
 
 class AtariCNN(eqx.Module):
@@ -177,7 +178,6 @@ class RecurrentQNetwork(eqx.Module):
 
     def initial_state(self, shape=tuple()):
         return self.memory.initial_state(shape)
-
 
 
 def mean_noise(network):
@@ -303,12 +303,11 @@ def boltzmann_policy(
     q_network, x, state, start, done, key, progress, epsilon_start, epsilon_end
 ):
     _, q_key, s_key  = random.split(key, 3)
-    #temp = anneal(epsilon_start, epsilon_end, progress)
     q_values, state = q_network(jnp.expand_dims(x, 0), state, start, done, key=q_key)
     ensemble_reduced = jax.random.choice(key, q_values, tuple(), axis=0)
-    divisor = 1e-6 + ensemble_reduced.std()
     temp = anneal(epsilon_start, epsilon_end, progress)
-    action = jax.random.categorical(s_key, ensemble_reduced / divisor * temp, axis=-1).squeeze(-1)
+    divisor = 1e-6 + ensemble_reduced.std() * temp
+    action = jax.random.categorical(s_key, ensemble_reduced / divisor, axis=-1).squeeze(-1)
     return action, state
 
 def sum_policy(

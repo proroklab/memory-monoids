@@ -1,19 +1,18 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.NoisyPositionOnlyCartPoleEasy"
+  env: "popgym.envs.RepeatFirstEasy"
   popgym_env: True
-  env_prev_action: True
-  segment_length: 20
-  epochs: 10_000
-  random_epochs: 10_000
+  env_prev_action: False
+  epochs: 5_000
+  random_epochs: 5_000
   eps_start: 0.2
   eps_end: 0.01
   propagate_state: True
   ratio: 1
 
 train:
-  batch_size: 50
+  batch_size: 10_000
   gamma: 
     - 0.99
   target_delay: 200 # In epochs/updates
@@ -26,28 +25,27 @@ train:
   train_ratio: 1
 
 buffer:
-  size: 100_000 # In segments
-  contiguous: False
+  size: 4_000_000 # In timesteps 
+  swap_iters: "auto" # sqrt(batch_size) auto
 
 model:
-  mlp_size: 256
-  recurrent_size: 256
-  dropout: 0.0
+  mlp_size: 1024
+  recurrent_size: 1024
+  dropout: 0.00
   ensemble_size: 1
   ensemble_subset: 1
-  memory_name: "FFM"
+  memory_name: "NSFFM"
   memory:
-    input_size: 256
-    trace_size: 64
-    context_size: 4
-    output_size: 256
-
+    input_size: 1024
+    trace_size: 32
+    context_size: 32
+    num_blocks: 2
+    dropout: 0.0
 
 eval:
   interval: 10
   episodes: 20
   collect:
-    segment_length: 200
     random_epochs: 0
     eps_start: 0.0
     eps_end: 0.00

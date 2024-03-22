@@ -1,7 +1,7 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.NoisyPositionCartPoleEasy"
+  env: "popgym.envs.NoisyPositionOnlyCartPoleEasy"
   popgym_env: True
   env_prev_action: True
   epochs: 10_000

@@ -39,6 +39,11 @@ def load_popgym_env(config, eval=False):
         instance = Flatten(Antialias(instance))
         if isinstance(instance.action_space, gym.spaces.MultiDiscrete):
             instance = DiscreteAction(instance)
+    elif config["collect"].get("memorygym_env"):
+        module, cls = config["collect"]["env"].rsplit(".", 1)
+        mod = importlib.import_module(module)
+        instance = getattr(mod, cls)()
+        instance.default_reset_parameters.update(config["collect"].get("env_kwargs", {}))
     else:
         instance = gym.make(config["collect"]["env"], **config["collect"].get("env_kwargs", {}))
     if config["collect"].get("atari_env") and config["model"].get("atari_cnn"):

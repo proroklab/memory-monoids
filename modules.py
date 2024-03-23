@@ -106,9 +106,9 @@ class AtariCNN(eqx.Module):
     ln2: nn.LayerNorm
     linear: nn.Linear
 
-    def __init__(self, output_size, key):
+    def __init__(self, output_size, in_channels=1, *, key):
         keys = random.split(key, 4)
-        self.c0 = nn.Conv2d(1, 32, kernel_size=8, stride=4, key=keys[0])
+        self.c0 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4, key=keys[0])
         self.ln0 = nn.LayerNorm((32, 20, 20), use_weight=False, use_bias=False)
         self.c1 = nn.Conv2d(32, 64, kernel_size=4, stride=2, key=keys[1])
         self.ln1 = nn.LayerNorm((64, 9, 9), use_weight=False, use_bias=False)
@@ -117,7 +117,10 @@ class AtariCNN(eqx.Module):
         self.linear = nn.Linear(7 * 7 * 64, output_size, key=keys[3])
 
     def __call__(self, x, keys=None):
-        x = x.reshape(-1, 84, 84)
+        # Move channels to first dim [C, W, H]
+        x = jnp.moveaxis(x, -1, 0)
+        # Ensure between 0 and 1
+        x = x.astype(jnp.float32) / 255.0
         x = leaky_relu(self.ln0(self.c0(x)))
         x = leaky_relu(self.ln1(self.c1(x)))
         x = leaky_relu(self.ln2(self.c2(x)))
@@ -143,7 +146,7 @@ class RecurrentQNetwork(eqx.Module):
         keys = random.split(key, 4)
         if config.get("atari_cnn"):
             self.input_size = (84, 84)
-            self.pre = eqx.filter_vmap(AtariCNN(config["mlp_size"], keys[1]))
+            self.pre = eqx.filter_vmap(AtariCNN(config["mlp_size"], config["num_channels"], key=keys[1]))
         else:
             [self.input_size] = obs_shape
             self.pre = eqx.filter_vmap(Block(self.input_size, config["mlp_size"], 0, keys[1]))

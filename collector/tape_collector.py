@@ -89,6 +89,12 @@ class TapeCollector:
                 truncated,
                 _,
             ) = self.env.step(action)
+            # For envs that never truncate or terminate
+            if step == self.config.get("forced_truncation", np.inf) - 1:
+                truncated = True
+            if step == self.config.get("forced_termination", np.inf) - 1:
+                terminated = True
+
             start = False
 
             observations.append(observation)

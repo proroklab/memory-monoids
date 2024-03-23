@@ -134,6 +134,10 @@ class SegmentCollector:
                 _,
             ) = self.env.step(action)
             start = False
+            if step >= self.config.get("forced_truncation", np.inf):
+                truncated = True
+            if step >= self.config.get("forced_termination", np.inf):
+                terminated = True
 
             observations.append(observation)
             terminateds.append(terminated)

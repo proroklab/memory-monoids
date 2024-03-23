@@ -100,6 +100,7 @@ class TapeBuffer(ReplayBuffer):
         self.start_key = start_key
         self.transition_counter = 0
         self.episode_starts = deque()
+        self.valid_transitions = 0
         assert self.data[start_key].ndim == 1
 
     def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
@@ -116,34 +117,45 @@ class TapeBuffer(ReplayBuffer):
         return {k: np.concatenate(v)[:size] for k, v in out.items()}
 
     def add(self, **data) -> None:
+        """This function differs slightly from that in the paper. Rather than
+        append and pop from the left, which is O(n) for an array, we simulate 
+        a circular buffer using in-place editing of the array. This results in O(1)
+        "popping" from the left. 
+        
+        We maintain a pointer which tells us our position in the circular buffer. As
+        data moves out of the circular buffer, we delete their indices from episode_starts.
+        This prevents us from sampling this data. The old data will eventually be
+        overwritten. 
+        """
         data, batch_size = self.validate_inputs(data)
 
+        # Buffer full
+        # find episodes that we are going to overwrite
+        # and remove their start indices from episode_starts
+        # Pop until enough free space
+        while (self.size + batch_size) >= self.max_size:
+            assert len(self.episode_starts) >= 2, "Must have at least two episodes in the buffer to wrap around"
+            popped = self.episode_starts.popleft()
+            num_transitions_popped = self.episode_starts[0] - popped
+            self.size -= num_transitions_popped
+
+        # Add new start indices to episode_starts
         idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
-
-        # TODO: We need to zero the data after the episode starts?
-        # Or what happens? We will replay a partial episode
-        # At most 1 partial episode will exist, can we ignore it?
-
-        # Find starts that we are going to overwrite
-        # and remove them from the list
-        if len(self.episode_starts) > 0 and (self.size + batch_size) >= self.max_size: 
-            while True:
-                if self.episode_starts[0] >= self.ptr and self.episode_starts[0] < self.ptr + batch_size:
-                    self.episode_starts.popleft()
-                else:
-                    break
-
         new_starts = self.ptr + np.flatnonzero(data[self.start_key])
         self.episode_starts.extend(new_starts.tolist())
 
+        # Move the pointer, wrap around the array if necessary. This is required
+        # as we update the array in-place instead of append/popleft
         self.ptr = (self.ptr + batch_size) % self.max_size
         self.transition_counter += batch_size
-        self.size = min(self.transition_counter, self.max_size)
+        self.size += batch_size
 
         for k, v in data.items():
             self.data[k][idx] = np.array(v, copy=False)
 
-if __name__ == "__main__":
+
+
+def test_add_sample():
     b = TapeBuffer(
         10,
         "start",
@@ -173,9 +185,53 @@ if __name__ == "__main__":
     assert (np.concatenate([data['start'], data2['start']]) == b.data['start'][:7]).all()
     keys = jax.random.split(jax.random.PRNGKey(0), 100)
 
-    around = b.sample(7, keys[0])
-
     for key in keys:
         sam = b.sample(2, key)
         assert sam['start'][0] == True
 
+def test_wraparound():
+    b = TapeBuffer(
+        5,
+        "start",
+        {
+            "a": {"shape": (), "dtype": np.int32},
+            "start": {"shape": (), "dtype": bool},
+        },
+    )
+   
+    data0 = {
+        "a": np.arange(2),
+        "start": np.array([True, False])
+    }
+    data1 = {
+        "a": 2 + np.arange(2),
+        "start": np.array([True, False])
+    }
+    data2 = {
+        "a": 4 + np.arange(2),
+        "start": np.array([True, False])
+    }
+    b.add(**data0)
+    b.add(**data1)
+    b.add(**data2)
+    # Goes from [0, 1, 2, 3, 4, 5] -> [5, 1, 2, 3, 4]
+    #           [s, _, s, _, s, _] -> [s, _, s, _, s] 
+    expected_a = np.array([5, 1, 2, 3, 4])
+    expected_start = np.array([0, 0, 1, 0, 1])
+    expected_size = 4
+
+    # Check data is correct
+    assert np.all(expected_a == b.data['a']), f"expected: {expected_a}\nactual: {b.data['a']}"
+
+    # Check flags 
+    assert np.all(expected_start == b.data['start']), f"expected: {expected_start}\nactual: {b.data['start']}"
+
+    # Check indices
+    assert np.all(np.where(expected_start)[0] == b.episode_starts), f"expected: {np.where(expected_start)[0]}\nactual: {b.episode_starts}"
+
+    # Check size
+    assert b.size == expected_size, f"expected: {expected_size}\nactual {b.size}"
+
+if __name__ == "__main__":
+    test_add_sample()
+    test_wraparound()

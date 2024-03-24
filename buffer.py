@@ -1,49 +1,33 @@
 from typing import Dict, Tuple
 import numpy as np
 import jax
-import jax.numpy as jnp
-import random
 from collections import deque
 
 
-class ReplayBuffer:
-    """A standard replay buffer using uniform sampling. This
-    may be used to implement a segment-based buffer."""
+class ReplayBufferBase:
+    """Base class for replay buffer"""
 
-    def __init__(self, buffer_size: int, schema: Dict[str, np.shape], contiguous=False):
+    def __init__(self, buffer_size: int, schema: Dict[str, np.shape], preallocate_memory=True):
         self.data: Dict[str, np.ndarray] = {}
         self.dtypes: Dict[str, np.dtype] = {}
         self.ptr = 0
         self.size = 0
         self.transitions_added = 0
         self.max_size = buffer_size
-        self.unpadded_size = 0
-        self.contiguous = contiguous
         for k, v in schema.items():
             shape = v["shape"]
             if isinstance(shape, int):
                 shape = (shape,)
             self.data[k] = np.zeros((buffer_size, *shape), dtype=v["dtype"])
+            if preallocate_memory:
+                # Allocate memory all at once, so we get OOM errors early
+                self.data[k].fill(0)
 
     def __len__(self):
         return self.size
 
-    def zeros(self, size: int) -> Dict[str, np.ndarray]:
-        return {k: np.zeros_like(v[:size]) for k, v in self.data.items()}
-
-    def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
-        out = {}
-        rng = np.random.default_rng(jax.random.bits(key).item())
-        if self.contiguous:
-            #start_idx = jax.random.randint(key, shape=(), minval=0, maxval=self.size)
-            start_idx = rng.integers(size=(), low=0, high=self.size)
-            idx = np.arange(start_idx, start_idx + size) % self.size
-        else:
-            #idx = jax.random.randint(key, shape=(size,), minval=0, maxval=self.size)
-            idx = rng.integers(size=(size,), low=0, high=self.size)
-        for k, v in self.data.items():
-            out[k] = v[idx]
-        return out
+    def get_stored_size(self):
+        return self.size
 
     def validate_inputs(
         self, data: Dict[str, np.ndarray]
@@ -62,6 +46,28 @@ class ReplayBuffer:
         batch_size = batch_sizes[0]
         return data, batch_size
 
+    def on_episode_end(self):
+        pass
+
+    def get_density(self):
+        return self.density if hasattr(self, 'density') else -1.0
+
+
+class ReplayBuffer(ReplayBufferBase):
+    """A standard replay buffer using uniform sampling. This
+    may be used to implement a segment-based buffer."""
+    def __init__(self, buffer_size: int, schema: Dict[str, np.shape]):
+        super().__init__(buffer_size, schema)
+        self.unpadded_size = 0
+
+    def sample(self, size: int, key: jax.random.PRNGKey) -> Dict[str, np.ndarray]:
+        out = {}
+        rng = np.random.default_rng(jax.random.bits(key).item())
+        idx = rng.integers(size=(size,), low=0, high=self.size)
+        for k, v in self.data.items():
+            out[k] = v[idx]
+        return out
+
     def add(self, **data) -> None:
         data, batch_size = self.validate_inputs(data)
         idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
@@ -77,19 +83,12 @@ class ReplayBuffer:
             assert k in data
 
         for k, v in data.items():
-            self.data[k][idx] = np.array(v, copy=False)
-
-    def on_episode_end(self):
-        pass
-
-    def get_stored_size(self):
-        return self.size
-
-    def get_density(self):
-        return self.density if hasattr(self, 'density') else -1.0
+            self.data[k][idx] = np.array(v, copy=True)
 
 
-class TapeBuffer(ReplayBuffer):
+
+
+class TapeBuffer(ReplayBufferBase):
     def __init__(
         self,
         buffer_size: int,
@@ -98,7 +97,6 @@ class TapeBuffer(ReplayBuffer):
     ):
         super().__init__(buffer_size, schema)
         self.start_key = start_key
-        self.transition_counter = 0
         self.episode_starts = deque()
         self.valid_transitions = 0
         assert self.data[start_key].ndim == 1
@@ -111,10 +109,62 @@ class TapeBuffer(ReplayBuffer):
             start_idx = rng.integers(len(self.episode_starts) - 1 - 1)
             start = self.episode_starts[start_idx]
             end = self.episode_starts[start_idx + 1]
-            count += end - start
-            for k, v in self.data.items():
-                out[k].append(v[start:end])
+            # Special case if we wrap around
+            # e.g., [3, 6, 10, 12, 4] (we select 12)
+            if end < start:
+                count += self.max_size - start + end
+                for k, v in self.data.items():
+                    out[k].append(v[start:])
+                    out[k].append(v[:end])
+            else:
+                count += end - start
+                for k, v in self.data.items():
+                    out[k].append(v[start:end])
+
         return {k: np.concatenate(v)[:size] for k, v in out.items()}
+
+    def get_num_transitions(self, idx_a, idx_b):
+        """Return the number of transitions between idx_a and idx_b.
+
+        idx_a might wrap around max_len before getting to idx b.
+        """
+        if idx_a < idx_b:
+            # Standard case
+            return idx_b - idx_a
+        else:
+            return self.max_size - idx_a + idx_b
+
+
+    def add_simple(self, **data) -> None:
+        """This is a simpler version of add.
+        
+        We do not use it as it has O(B) time complexity where B
+        is the length of the input (not the buffer, but the new data).
+        However, it is easier to implement and understand. Feel free to use
+        this instead of add
+        """
+        data, batch_size = self.validate_inputs(data)
+
+        # Add new start indices to episode_starts
+        idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
+        new_starts = self.ptr + np.flatnonzero(data[self.start_key])
+        self.ptr = (self.ptr + batch_size) % self.max_size
+
+        # Pop all starts in the new indices
+        # We will be overwriting these episodes
+        # O(batch_size) time complexity
+        while self.episode_starts and self.episode_starts[0] in idx: 
+            self.episode_starts.popleft()
+
+        # Add new indices
+        self.episode_starts.extend(new_starts.tolist())
+        self.transitions_added += batch_size
+        self.size = min(self.max_size, self.size + batch_size)
+
+        for k, v in data.items():
+            self.data[k][idx] = np.array(v, copy=True)
+
+        assert self.size <= self.max_size
 
     def add(self, **data) -> None:
         """This function differs slightly from that in the paper. Rather than
@@ -133,11 +183,16 @@ class TapeBuffer(ReplayBuffer):
         # find episodes that we are going to overwrite
         # and remove their start indices from episode_starts
         # Pop until enough free space
-        while (self.size + batch_size) >= self.max_size:
-            assert len(self.episode_starts) >= 2, "Must have at least two episodes in the buffer to wrap around"
+        while (self.size + batch_size) > self.max_size:
             popped = self.episode_starts.popleft()
-            num_transitions_popped = self.episode_starts[0] - popped
+            # TODO: Handle case where indices wrap around, e.g. [8, 0, 2, 4] case
+            if popped > self.episode_starts[0]:
+                num_transitions_popped = self.max_size - popped + self.episode_starts[0]
+            # Normal case, e.g. [3, 4, 9, 1]
+            else:
+                num_transitions_popped = self.episode_starts[0] - popped
             self.size -= num_transitions_popped
+
 
         # Add new start indices to episode_starts
         idx = np.arange(self.ptr, self.ptr + batch_size) % self.max_size
@@ -147,11 +202,13 @@ class TapeBuffer(ReplayBuffer):
         # Move the pointer, wrap around the array if necessary. This is required
         # as we update the array in-place instead of append/popleft
         self.ptr = (self.ptr + batch_size) % self.max_size
-        self.transition_counter += batch_size
+        self.transitions_added += batch_size
         self.size += batch_size
 
         for k, v in data.items():
-            self.data[k][idx] = np.array(v, copy=False)
+            self.data[k][idx] = np.array(v, copy=True)
+
+        assert self.size <= self.max_size
 
 
 
@@ -222,16 +279,52 @@ def test_wraparound():
 
     # Check data is correct
     assert np.all(expected_a == b.data['a']), f"expected: {expected_a}\nactual: {b.data['a']}"
-
     # Check flags 
     assert np.all(expected_start == b.data['start']), f"expected: {expected_start}\nactual: {b.data['start']}"
-
     # Check indices
     assert np.all(np.where(expected_start)[0] == b.episode_starts), f"expected: {np.where(expected_start)[0]}\nactual: {b.episode_starts}"
+    # Check size
+    # This test fails when using simple as size is always max_size once we reach max_size
+    # Don't worry about it
+    assert b.size == expected_size, f"expected: {expected_size}\nactual {b.size}"
 
+def test_wraparound2():
+    b = TapeBuffer(
+        10,
+        "start",
+        {
+            "a": {"shape": (), "dtype": np.int32},
+            "start": {"shape": (), "dtype": bool},
+        },
+    )
+
+    # [0, 1, ..., 38, 39]
+    datas = [
+        {
+            "a": i * 2 + np.arange(2),
+            "start": np.array([1, 0])
+        }
+        for i in range(20)
+    ]
+    for d in datas:
+        b.add(**d)
+
+    # Goes from [0, 1, 2, 3, 4, 5] -> [5, 1, 2, 3, 4]
+    #           [s, _, s, _, s, _] -> [s, _, s, _, s] 
+    expected_a = np.array([30, 31, 32, 33, 34, 35, 36, 37, 38, 39])
+    expected_start = np.array([1, 0, 1, 0, 1, 0, 1, 0, 1, 0])
+    expected_size = 10
+
+    # Check data is correct
+    assert np.all(expected_a == b.data['a']), f"expected: {expected_a}\nactual: {b.data['a']}"
+    # Check flags 
+    assert np.all(expected_start == b.data['start']), f"expected: {expected_start}\nactual: {b.data['start']}"
+    # Check indices
+    assert np.all(np.where(expected_start)[0] == b.episode_starts), f"expected: {np.where(expected_start)[0]}\nactual: {b.episode_starts}"
     # Check size
     assert b.size == expected_size, f"expected: {expected_size}\nactual {b.size}"
 
 if __name__ == "__main__":
     test_add_sample()
     test_wraparound()
+    test_wraparound2()

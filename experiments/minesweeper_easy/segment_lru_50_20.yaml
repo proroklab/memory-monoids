@@ -26,7 +26,7 @@ train:
   train_ratio: 1
 
 buffer:
-  size: 500_000 # In segments
+  size: 160_000 # In segments
   contiguous: False
 
 model:

@@ -25,7 +25,7 @@ train:
   train_ratio: 1
 
 buffer:
-  size: 4_000_000 # In timesteps 
+  size: 1_000_000 # In timesteps 
   swap_iters: "auto" # sqrt(batch_size) auto
 
 model:

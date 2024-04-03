@@ -1,7 +1,7 @@
 seed: 0
 
 collect:
-  env: "popgym.envs.CountRecallEasy"
+  env: "popgym.envs.MineSweeperEasy"
   popgym_env: True
   env_prev_action: True
   segment_length: 20

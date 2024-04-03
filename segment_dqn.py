@@ -99,7 +99,6 @@ rb = ReplayBuffer(
         "mask": {"shape": config["collect"]["segment_length"], "dtype": bool},
         "episode_id": {"shape": config["collect"]["segment_length"], "dtype": np.int64},
     },
-    config["buffer"]["contiguous"]
 )
 
 key, model_key, memory_key = random.split(key, 3)

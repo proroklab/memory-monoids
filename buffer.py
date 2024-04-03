@@ -83,7 +83,7 @@ class ReplayBuffer(ReplayBufferBase):
             assert k in data
 
         for k, v in data.items():
-            self.data[k][idx] = np.array(v, copy=True)
+            self.data[k][idx] = np.array(v, copy=False)
 
 
 
@@ -162,7 +162,7 @@ class TapeBuffer(ReplayBufferBase):
         self.size = min(self.max_size, self.size + batch_size)
 
         for k, v in data.items():
-            self.data[k][idx] = np.array(v, copy=True)
+            self.data[k][idx] = np.array(v, copy=False)
 
         assert self.size <= self.max_size
 
@@ -206,7 +206,7 @@ class TapeBuffer(ReplayBufferBase):
         self.size += batch_size
 
         for k, v in data.items():
-            self.data[k][idx] = np.array(v, copy=True)
+            self.data[k][idx] = np.array(v, copy=False)
 
         assert self.size <= self.max_size
 

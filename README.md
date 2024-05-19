@@ -34,5 +34,17 @@ We find that replacing SBB with TBB greatly improves sample efficiency across a 
 - `requirements.txt` should contain necessary packages to run the scripts (without versions, to avoid dependency hell)
 - `requirements_freeze.txt` contains the exact dependency verions for the experiments (if `requirements.txt` does not work)
 
+## Rerunning Experiments
+To rerun experiments, first install either `requirements.txt` or `requirements_freeze.txt`
+```
+pip install -r requirements.txt
+```
+Then, simply run either the SBB or TBB script
+```
+python tape_dqn.py experiments/cartpole_easy/tape_s5.yaml # Run TBB
+python segment_dqn.py experiments/cartpole_easy/segment_s5_10_100.yaml # Run SBB
+```
+You may need to set up a `wandb` account to log metrics to the cloud.
+
 ## Citation
 Coming soon!

@@ -47,7 +47,7 @@ def load_popgym_env(config, eval=False):
     else:
         instance = gym.make(config["collect"]["env"], **config["collect"].get("env_kwargs", {}))
     if config["collect"].get("atari_env") and config["model"].get("atari_cnn"):
-        instance = gym.wrappers.AtariPreprocessing(instance, frame_skip=1, scale_obs=True, terminal_on_life_loss=True)
+        instance = gym.wrappers.AtariPreprocessing(instance, frame_skip=1, scale_obs=True)
         instance.action_space.seed(config["seed"] + eval * 1000)
         return instance
     instance.action_space.seed(config["seed"] + eval * 1000)

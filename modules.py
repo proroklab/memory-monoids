@@ -109,21 +109,22 @@ class AtariCNN(eqx.Module):
     def __init__(self, output_size, in_channels=1, *, key):
         keys = random.split(key, 4)
         self.c0 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4, key=keys[0])
-        self.ln0 = nn.LayerNorm((32, 20, 20), use_weight=False, use_bias=False)
+        self.ln0 = nn.LayerNorm((20, 20), use_weight=False, use_bias=False)
         self.c1 = nn.Conv2d(32, 64, kernel_size=4, stride=2, key=keys[1])
-        self.ln1 = nn.LayerNorm((64, 9, 9), use_weight=False, use_bias=False)
+        self.ln1 = nn.LayerNorm((9, 9), use_weight=False, use_bias=False)
         self.c2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, key=keys[2])
-        self.ln2 = nn.LayerNorm((64, 7, 7), use_weight=False, use_bias=False)
+        self.ln2 = nn.LayerNorm((7, 7), use_weight=False, use_bias=False)
         self.linear = nn.Linear(7 * 7 * 64, output_size, key=keys[3])
 
     def __call__(self, x, keys=None):
         # Move channels to first dim [C, W, H]
-        x = jnp.moveaxis(x, -1, 0)
-        # Ensure between 0 and 1
-        x = x.astype(jnp.float32) / 255.0
-        x = leaky_relu(self.ln0(self.c0(x)))
-        x = leaky_relu(self.ln1(self.c1(x)))
-        x = leaky_relu(self.ln2(self.c2(x)))
+        if x.ndim == 2:
+            x = x.reshape(1, *x.shape)
+        else:
+            x = jnp.moveaxis(x, -1, 0)
+        x = leaky_relu(eqx.filter_vmap(self.ln0)(self.c0(x)))
+        x = leaky_relu(eqx.filter_vmap(self.ln1)(self.c1(x)))
+        x = leaky_relu(eqx.filter_vmap(self.ln2)(self.c2(x)))
         # x = leaky_relu(self.c0(x))
         # x = leaky_relu(self.c1(x))
         # x = leaky_relu(self.c2(x))

@@ -1,6 +1,6 @@
 # Revisiting Recurrent Reinforcement Learning with Memory Monoids
 
-This repository contains the code for *Revisiting Recurrent Reinforcement Learning with Memory Monoids*.
+This repository contains the code for *Revisiting Recurrent Reinforcement Learning with Memoroids*.
 
 The standard way to train recurrent policies in RL could use some improvement. We usually truncate and zero-pad trajectories to a fixed length so that we can create a tensor of shape `[Batch x Seq. Length]`, as depicted below:
 
